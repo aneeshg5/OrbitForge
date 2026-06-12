@@ -1,0 +1,48 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Emscripten SDK
+        uses: actions/cache@v4
+        with:
+          path: /opt/emsdk
+          key: emsdk-3.1.50
+
+      - name: Install Emscripten SDK
+        run: |
+          if [ ! -d /opt/emsdk ]; then
+            git clone https://github.com/emscripten-core/emsdk.git /opt/emsdk
+            /opt/emsdk/emsdk install 3.1.50
+            /opt/emsdk/emsdk activate 3.1.50
+          fi
+
+      - name: Build WASM
+        run: ./scripts/build_wasm.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - run: npm ci
+        working-directory: web
+
+      - run: npm run build
+        working-directory: web
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          projectName: orbitforge
+          directory: web/dist

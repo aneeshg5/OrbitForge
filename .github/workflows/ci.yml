@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  engine-native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libeigen3-dev
+
+      - name: Build (Debug + ASan + UBSan)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug engine/
+          cmake --build build -j$(nproc)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+      - name: Build (TSan)
+        run: |
+          cmake -B build_tsan -DCMAKE_BUILD_TYPE=Debug -DENABLE_TSAN=ON engine/
+          cmake --build build_tsan -j$(nproc)
+
+      - name: Test (TSan)
+        run: cd build_tsan && ctest --output-on-failure
+
+  web-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx tsc --noEmit
+        working-directory: web

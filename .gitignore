@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+build_*/
+web/dist/
+web/node_modules/
+
+# WASM build outputs (generated, not committed)
+web/public/orbitforge.wasm
+web/public/orbitforge.js
+
+# Emscripten cache
+.emscripten_cache/
+
+# IDE
+.vscode/
+.idea/
+*.user
+
+# macOS
+.DS_Store
+
+# CLAUDE.md is gitignored per the spec
+CLAUDE.md
