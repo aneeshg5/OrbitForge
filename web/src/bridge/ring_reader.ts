@@ -1,8 +1,10 @@
 import type { StateFrame } from './wasm_types.js'
 
-// sizeof(StateFrame) in bytes — must match C++ struct (see wasm_api.cpp).
-// 8 bytes × (1 + 6 + 6+1 + 6+1 + 6+1) fields + 1 byte activeFault padded to 8 = 312 bytes
-const FRAME_BYTES = 312
+// sizeof(StateFrame) in bytes — must match C++ struct (engine/include/wasm_api.hpp).
+// 46 doubles (1 simTime + 3+3 true + (3+3+6+1)×3 filters = 46) × 8 bytes = 368,
+// + 1 byte activeFault padded up to the next 8-byte boundary = 376 bytes.
+// Verified against the compiler's sizeof(StateFrame): see docs/checkpoint.md.
+const FRAME_BYTES = 376
 
 // Offsets (in doubles, i.e. byte_offset / 8) for each field in StateFrame.
 // Must exactly mirror the C++ struct layout.
@@ -26,7 +28,6 @@ const OFF = {
 } as const
 
 export class RingReader {
-  private readonly buf: SharedArrayBuffer
   private readonly f64: Float64Array
   private readonly u8: Uint8Array
   private readonly writePosView: Int32Array
@@ -34,15 +35,22 @@ export class RingReader {
   private readonly capacity: number
   private readPos = 0
 
-  constructor(sab: SharedArrayBuffer, capacity: number) {
-    this.buf = sab
+  // ringBufferPtr is the byte offset returned by get_ring_buffer_ptr() —
+  // the address of the SPSCRingBuffer *within* WASM linear memory, which is
+  // not byte 0 (the Simulation singleton, and its ring buffer member, live
+  // wherever Emscripten's allocator placed them). The header layout from
+  // that offset is fixed by engine/include/memory/ring_buffer.hpp: a
+  // 64-byte write_pos_ slot, a 64-byte read_pos_ slot, then frames.
+  constructor(sab: SharedArrayBuffer, ringBufferPtr: number, capacity: number) {
+    if (ringBufferPtr % 8 !== 0) {
+      throw new Error(`ring buffer pointer ${ringBufferPtr} is not 8-byte aligned`)
+    }
     this.capacity = capacity
-    // Head/tail live at the start of the buffer (two 64-byte-aligned Int32 slots)
-    this.writePosView = new Int32Array(sab, 0, 1)
-    this.readPosView  = new Int32Array(sab, 64, 1)
-    // Frames start after 128-byte header (2 × 64-byte cache lines for head/tail)
-    this.f64 = new Float64Array(sab, 128)
-    this.u8  = new Uint8Array(sab, 128)
+    this.writePosView = new Int32Array(sab, ringBufferPtr, 1)
+    this.readPosView  = new Int32Array(sab, ringBufferPtr + 64, 1)
+    const framesOffset = ringBufferPtr + 128
+    this.f64 = new Float64Array(sab, framesOffset)
+    this.u8  = new Uint8Array(sab, framesOffset)
   }
 
   /** Returns all pending frames (may be empty). */

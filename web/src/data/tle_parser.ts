@@ -39,17 +39,21 @@ export function parseTle(name: string, line1: string, line2: string): OrbitalEle
   }
 }
 
+// Standard Meeus Gregorian-calendar-to-JD conversion (Meeus, "Astronomical
+// Algorithms" ch. 7), specialized for "January 0.0 UT of `year`" plus the
+// fractional day-of-year offset. Verified against the known reference
+// JD(2024-01-01 00:00 UT) = 2460310.5 and JD(2000-01-01 00:00 UT) = 2451544.5.
+// Mirrors engine/include/scenario.hpp's tle_epoch_to_jd exactly, so the
+// engine and the UI agree on epoch interpretation.
 function tleEpochToJD(epochStr: string): number {
   const year2d = parseInt(epochStr.slice(0, 2), 10)
   const year = year2d >= 57 ? 1900 + year2d : 2000 + year2d
   const dayOfYear = parseFloat(epochStr.slice(2))
 
-  // Jan 1.0 of year in Julian Date
-  const y = year - 1
-  const jd0 = 367 * y
-    - Math.floor(7 * (y + Math.floor(13 / 12)) / 4)
-    + Math.floor(275 * 1 / 9)    // month = 1
-    + 1721013.5
+  const yp = year - 1
+  const a = Math.floor(yp / 100)
+  const b = 2 - a + Math.floor(a / 4)
+  const jd0 = Math.floor(365.25 * (yp + 4716)) + 428 + b - 1524.5
 
-  return jd0 + (dayOfYear - 1)
+  return jd0 + dayOfYear
 }

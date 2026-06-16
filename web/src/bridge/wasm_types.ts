@@ -66,8 +66,8 @@ export interface MCStats {
 
 // WASM module interface — populated by Emscripten glue after load
 export interface OrbitForgeModule {
-  ccall: (name: string, returnType: string, argTypes: string[], args: unknown[]) => unknown;
-  cwrap: (name: string, returnType: string, argTypes: string[]) => (...args: unknown[]) => unknown;
+  ccall: (name: string, returnType: string | null, argTypes: string[], args: unknown[]) => unknown;
+  cwrap: (name: string, returnType: string | null, argTypes: string[]) => (...args: unknown[]) => unknown;
   getValue: (ptr: number, type: string) => number;
   setValue: (ptr: number, value: number, type: string) => void;
   HEAPF64: Float64Array;

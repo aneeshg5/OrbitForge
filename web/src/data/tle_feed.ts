@@ -15,8 +15,6 @@ export const PRESETS: SatellitePreset[] = [
   { name: 'COSMOS 2251 DEB',   noradId: 33791, category: 'Debris',   whyInteresting: 'High-eccentricity debris — filter divergence demo' },
 ]
 
-const CELESTRAK_BASE = 'https://celestrak.org/SOCRATES/query.php'
-
 export async function fetchTleByNorad(noradId: number): Promise<OrbitalElements> {
   const url = `https://celestrak.org/satcat/tle.php?CATNR=${noradId}`
   const resp = await fetch(url)

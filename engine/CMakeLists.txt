@@ -24,6 +24,9 @@ endif()
 # Eigen3
 find_package(Eigen3 REQUIRED)
 
+# Threads (ring buffer multi-thread test, Phase 2)
+find_package(Threads REQUIRED)
+
 # GTest via FetchContent
 include(FetchContent)
 FetchContent_Declare(
@@ -44,6 +47,7 @@ set(ENGINE_SOURCES
     src/filters/ekf.cpp
     src/filters/ukf.cpp
     src/sensors/magnetometer.cpp
+    src/wasm_api.cpp
 )
 
 # Test target
@@ -57,9 +61,14 @@ add_executable(orbitforge_tests
     tests/test_ukf.cpp
     tests/test_sensors.cpp
     tests/test_filter_consistency.cpp
+    tests/test_ring_buffer.cpp
+    tests/test_pool_alloc.cpp
+    tests/test_scenario.cpp
+    tests/test_fault_injector.cpp
+    tests/test_wasm_api.cpp
 )
 target_include_directories(orbitforge_tests PRIVATE include)
-target_link_libraries(orbitforge_tests PRIVATE GTest::gtest_main Eigen3::Eigen)
+target_link_libraries(orbitforge_tests PRIVATE GTest::gtest_main Eigen3::Eigen Threads::Threads)
 enable_testing()
 include(GoogleTest)
 gtest_discover_tests(orbitforge_tests)
@@ -71,4 +80,4 @@ add_executable(orbitforge_benchmarks
     benchmarks/bench_filters.cpp
 )
 target_include_directories(orbitforge_benchmarks PRIVATE include)
-target_link_libraries(orbitforge_benchmarks PRIVATE Eigen3::Eigen)
+target_link_libraries(orbitforge_benchmarks PRIVATE Eigen3::Eigen Threads::Threads)

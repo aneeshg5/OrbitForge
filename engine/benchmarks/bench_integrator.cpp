@@ -5,6 +5,7 @@
 #include "dynamics/eom.hpp"
 #include "integrators/rk4.hpp"
 #include "constants.hpp"
+#include "memory/ring_buffer.hpp"
 
 using namespace orbitforge;
 using namespace orbitforge::dynamics;
@@ -64,6 +65,28 @@ static double bench_rk4_step(int iterations) {
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / iterations;
 }
 
+// Single-threaded push+pop pairs, back to back — measures the raw cost of
+// the atomic operations themselves (CLAUDE.md §13's "counted over 10
+// seconds" methodology), not thread-scheduling overhead from a real
+// producer/consumer pair (that's a different, much noisier measurement).
+static double bench_ring_buffer_throughput(int iterations) {
+    orbitforge::memory::SPSCRingBuffer<int, 1024> rb;
+    int sink = 0;
+
+    const auto t0 = Clock::now();
+    for (int i = 0; i < iterations; ++i) {
+        rb.push(i);
+        rb.pop(sink);
+    }
+    const auto t1 = Clock::now();
+
+    volatile int vsink = sink;
+    (void)vsink;
+
+    const double seconds = std::chrono::duration<double>(t1 - t0).count();
+    return iterations / seconds;  // frames/sec (push+pop pairs/sec)
+}
+
 namespace orbitforge::benchmarks { void run_filter_benchmarks(); }
 
 int main() {
@@ -75,5 +98,9 @@ int main() {
     std::printf("rk4_step (6-state, J2+drag, %d iterations):     %.3f us/step\n", N, rk4_us);
 
     orbitforge::benchmarks::run_filter_benchmarks();
+
+    const double ring_buffer_fps = bench_ring_buffer_throughput(10'000'000);
+    std::printf("ring buffer push+pop pairs/sec (single-thread, %d iterations): %.2e /sec\n",
+                10'000'000, ring_buffer_fps);
     return 0;
 }
