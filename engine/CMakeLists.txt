@@ -40,15 +40,27 @@ include_directories(include)
 set(ENGINE_SOURCES
     src/dynamics/eom.cpp
     src/dynamics/perturbations.cpp
+    src/filters/kf.cpp
+    src/filters/ekf.cpp
+    src/filters/ukf.cpp
+    src/sensors/magnetometer.cpp
 )
 
 # Test target
 add_executable(orbitforge_tests
     ${ENGINE_SOURCES}
     tests/test_eom.cpp
+    tests/test_rk4.cpp
+    tests/test_rk45.cpp
+    tests/test_kf.cpp
+    tests/test_ekf.cpp
+    tests/test_ukf.cpp
+    tests/test_sensors.cpp
+    tests/test_filter_consistency.cpp
 )
 target_include_directories(orbitforge_tests PRIVATE include)
 target_link_libraries(orbitforge_tests PRIVATE GTest::gtest_main Eigen3::Eigen)
+enable_testing()
 include(GoogleTest)
 gtest_discover_tests(orbitforge_tests)
 
@@ -56,6 +68,7 @@ gtest_discover_tests(orbitforge_tests)
 add_executable(orbitforge_benchmarks
     ${ENGINE_SOURCES}
     benchmarks/bench_integrator.cpp
+    benchmarks/bench_filters.cpp
 )
 target_include_directories(orbitforge_benchmarks PRIVATE include)
 target_link_libraries(orbitforge_benchmarks PRIVATE Eigen3::Eigen)

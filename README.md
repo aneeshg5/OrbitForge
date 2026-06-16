@@ -30,11 +30,15 @@ cd build && ctest --output-on-failure
 
 ## Architecture
 
-See [docs/architecture.md](docs/architecture.md) and [docs/math.md](docs/math.md).
+See [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md),
+and the build log in [docs/checkpoint.md](docs/checkpoint.md).
 
 ## Status
 
-- [ ] Phase 1 — C++ engine (EOM, RK4/RK45, KF/EKF/UKF, sensors, tests)
+- [x] Phase 1 — C++ engine (EOM, RK4/RK45, KF/EKF/UKF, sensors, tests, benchmarks)
 - [ ] Phase 2 — WASM build + lock-free memory systems
 - [ ] Phase 3 — WebGL2 renderer + Monte Carlo UI
 - [ ] Phase 4 — Cloudflare Pages deploy
+
+Phase 1: 33/33 tests passing (`cd build && ctest`); benchmarks in
+[docs/benchmarks.md](docs/benchmarks.md) — all metrics 13–32x inside target.
