@@ -36,9 +36,9 @@ and the build log in [docs/checkpoint.md](docs/checkpoint.md).
 ## Status
 
 - [x] Phase 1 — C++ engine (EOM, RK4/RK45, KF/EKF/UKF, sensors, tests, benchmarks)
-- [ ] Phase 2 — WASM build + lock-free memory systems
+- [x] Phase 2 — WASM build + lock-free memory systems (ring buffer, pool allocator, fault injector, Simulation class, web scaffold)
 - [ ] Phase 3 — WebGL2 renderer + Monte Carlo UI
 - [ ] Phase 4 — Cloudflare Pages deploy
 
-Phase 1: 33/33 tests passing (`cd build && ctest`); benchmarks in
-[docs/benchmarks.md](docs/benchmarks.md) — all metrics 13–32x inside target.
+Phase 1: 33/33 tests passing; benchmarks in [docs/benchmarks.md](docs/benchmarks.md) — all metrics 13–32x inside target.
+Phase 2: 63/63 tests passing; ring buffer throughput 3.46×10⁸/sec (69× target); WASM compile verified in CI.
