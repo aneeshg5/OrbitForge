@@ -1,4 +1,4 @@
-// Monte Carlo filter consistency tests (CLAUDE.md §14).
+// Monte Carlo filter consistency tests.
 //
 // A filter is consistent when err_i^T P_i^{-1} err_i ~ chi²(6) each step.
 // Averaged over N=100 runs: N·NEES ~ chi²(6N=600).

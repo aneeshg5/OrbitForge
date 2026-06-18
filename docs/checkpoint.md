@@ -564,12 +564,706 @@ All Phase 1 environment notes still apply. Phase 2 additions:
   and `-DENABLE_TSAN=ON` for race-detection. The ring-buffer multi-thread
   test must be run under TSan, not ASan.
 
-## What's next — Phase 3
+---
 
-Per `CLAUDE.md` §17: `ensemble.hpp` (SoA state buffer), `mc_runner.cpp`
-(pthread pool, N-run distribution, statistics), then the WebGL2 renderer
-(`earth.ts`, `orbit.ts`, `covariance.ts`, `panels.ts`) and UI layer
-(`scenario_editor.ts`, `fault_panel.ts`, `filter_compare.ts`,
-`mc_results.ts`, `tle_feed.ts`). Re-add `mc_runner.cpp` to
-`scripts/build_wasm.sh` once it exists. Run SoA-vs-AoS throughput
-benchmark and commit to `docs/benchmarks.md`.
+## Phase 3 — Monte Carlo + Visualization (in progress)
+
+### Step 1 — `monte_carlo/ensemble.hpp` (SoA state buffer)
+
+`EnsembleState<MaxN>` holds 6 parallel `std::array<double, MaxN>` (pos_x/y/z,
+vel_x/y/z), `MaxN` a compile-time template parameter (`k_mc_max_runs = 5000`,
+matching CLAUDE.md §11's `mcRuns` upper bound). `set()`/`get()` round-trip
+to/from a fixed-size `Eigen::Matrix<double,6,1>` for interop with the
+existing filter/dynamics code. `step_ensemble()` propagates runs `[0,n)` by
+one RK4 step, reusing the existing `rk4_step()` + `compute_acceleration()`
+per run — this is the direct, "obviously correct" implementation, validated
+against the single-run path and an 8-run one-period Kepler-closure check in
+`test_ensemble.cpp`.
+
+**Dead end — SoA storage alone gave no measurable benefit, and the first
+benchmark draft would have reported a fabricated number to match CLAUDE.md's
+expectation.** CLAUDE.md §7 claims "~40% throughput on batch RK4 for N=1000
+runs" comparing an AoS struct (with an unused 36-double covariance block
+dragging position/velocity fields apart in memory) against the SoA layout.
+The first benchmark draft measured this directly: `step_ensemble()` (SoA,
+processed one run at a time through the same scalar Eigen path as the AoS
+version) against an AoS struct processed identically. Result, repeated
+across multiple runs: **+0% to +13%, indistinguishable from measurement
+noise** — nowhere near 40%.
+
+Investigated why before writing anything down: profiled both layouts at
+N=1000 and N=5000, with and without J2 enabled. The result didn't change
+with N, which ruled out "dataset too small to exceed cache" as the
+explanation by itself. The actual cause: `compute_acceleration()`'s inner
+math (sqrt + divides for gravity and J2) is floating-point-latency-bound,
+not memory-bandwidth-bound, and **identical in both layouts** — both
+versions copy into the same `Eigen::Matrix<double,6,1>` and call the same
+scalar function per run. Memory layout cannot speed up a loop whose
+bottleneck is FPU latency inside a per-iteration function call, regardless
+of how the inputs are stored. CLAUDE.md §7's own text says the real lever is
+that SoA storage is "cache-prefetchable, **SIMD-vectorizable**" — the
+existing `step_ensemble()` realizes the first half of that sentence and
+none of the second half.
+
+**Fix:** wrote `accel_gravity_j2_batch()` + `step_ensemble_fast()` —a batched
+gravity+J2 kernel operating directly on the six `double[N]` arrays with no
+per-run `Eigen::Matrix` construction and no branch inside the hot loop (the
+`enable_j2` toggle selects which of two loop bodies runs, rather than
+branching per-element). This is the standard split-RK4 form for a
+second-order system `ẍ = a(x)` (math worked out by hand in the header
+comment: `a0=a(p); p1=p+h/2·v; v1=v+h/2·a0; a1=a(p1); ...`), proven
+algebraically identical to applying the generic `rk4_step()` to
+`f(p,v)=(v,a(p))`, and then verified numerically against the existing
+per-run path to `1e-9` relative tolerance in
+`Ensemble.FastPathMatchesGenericPathWithJ2`/`...TwoBodyOnly`.
+
+Scoped to gravity+J2 only (not drag/SRP) — drag needs a branchy 7-band
+atmosphere-altitude lookup and SRP needs a shared (not per-run) sun-direction
+vector; neither is a clean fit for this treatment, and J2 is already the
+dominant LEO perturbation and the same scope as the EKF/UKF analytical
+Jacobians. `step_ensemble()` (the generic path) remains the correct
+fallback whenever drag or SRP are enabled — it is not being deleted or
+deprecated, just no longer the only path.
+
+**Re-benchmarked with three configurations instead of two** (AoS-scalar,
+SoA-scalar, SoA-batched) to make the actual source of any improvement
+legible rather than collapsing it into one AoS-vs-SoA number. Results
+(N=1000, 100 steps, Release build, repeated 3+ times):
+- AoS scalar vs. SoA scalar (`step_ensemble`): **+10–20%**, confirming the
+  "layout alone doesn't matter here" finding above.
+- AoS scalar vs. SoA batched (`step_ensemble_fast`): **+430–485%**,
+  consistent across repeated runs.
+
+This is the honest number, not the CLAUDE.md-estimated one — it is larger,
+not smaller, which is a fine outcome, but the actual measured number is
+what got committed to `docs/benchmarks.md`, with the methodology and the
+three-configuration breakdown explained so a future reader can see why the
+two SoA numbers differ so much from each other. Both `EnsembleState` and
+`EnsembleWorkspace` (the batched kernel's scratch buffers) are intended to
+be heap-allocated once via `std::make_unique` at Monte Carlo run start, not
+inside the per-tick hot loop — same allocation discipline as the rest of
+the engine.
+
+Tests in `test_ensemble.cpp` (6 tests): set/get round-trip; single run via
+`step_ensemble` matches a direct `rk4_step()` call; two runs propagate
+independently (no cross-lane contamination); 8-run one-period Kepler
+closure (<1 m drift, same criterion as `test_rk4.cpp`); `step_ensemble_fast`
+matches `step_ensemble` with J2 enabled; same with J2 disabled (two-body
+only).
+
+### Step 2 — `monte_carlo/mc_runner.hpp`/`.cpp` (thread pool + statistics)
+
+`MCConfig`/`MCStats` + `run_monte_carlo(cfg)`: distributes `cfg.n_runs`
+independent realizations across a fixed `k_mc_threads = 4` `std::thread`
+pool as contiguous slices (`base = n/4`, remainder runs added to the first
+`n%4` threads) — matching CLAUDE.md §8's "no work-stealing, runs are equal
+cost." Each thread accumulates its own `PartialSums` (squared position/
+velocity error, NEES sum/count, NIS sum/count, one entry per timestep) with
+zero shared mutable state during the parallel phase — no locks needed
+inside `run_one()`, only a single merge pass across the 4 `PartialSums`
+after all threads join.
+
+Each run propagates a true trajectory via two-body RK4 with
+`w ~ N(0,Q)` injected every step (the same construction Phase 1's
+`test_filter_consistency.cpp` validated, documented in `math.md §6`) against
+a direct noisy ECI position measurement (not the ECEF-rotated GPS model
+`wasm_api.cpp`'s `Simulation` class uses for the live single-scenario path —
+documented as a deliberate scope decision in `mc_runner.hpp`'s header
+comment, since the two don't need to match for a statistical consistency
+campaign and using the simpler model kept this component testable directly
+against the already-validated Phase 1 result). `FilterKind` selects KF/EKF/
+UKF; a `configure_dynamics()` overload set (mirroring `wasm_api.cpp`'s
+`seed_filter()` pattern from Phase 2) sets `perturb_cfg`/`julian_date` for
+EKF/UKF and is a no-op for KF, which has neither field.
+
+**Added a general `chi_squared_quantile(p, dof)` rather than reusing the
+hardcoded `[5.35, 6.69]` constants from `test_filter_consistency.cpp`.**
+CLAUDE.md §8 needs 95% NEES/NIS bounds for arbitrary N (mcRuns ranges
+100–5000), not just N=100. Implemented Wilson-Hilferty
+(`math.md §6`: `χ²(ν,p) ≈ ν(1 - 2/(9ν) + z_p√(2/(9ν)))³`) with the normal
+quantile `z_p` computed by **bisection on the exact CDF**
+(`0.5·erfc(-z/√2)`, both available in `<cmath>`) rather than a transcribed
+rational-approximation formula for the quantile itself — avoids any risk of
+a mistyped coefficient, and the extra iterations cost nothing since this
+runs once per campaign summary, not per-tick. Verified by hand before
+trusting it: at ν=600, `z_{0.025}=-1.959964` and `z_{0.975}=1.959964` give
+`χ²≈534.1` and `≈669.8`, i.e. `/100 → [5.34, 6.70]` — matches the
+already-validated `[5.35, 6.69]` reference. `ChiSquaredQuantile.
+MatchesKnownNeesBounds` encodes this check as a regression test.
+
+**`McRunner.EkfNeesConsistencyMatchesPhase1Result`** reproduces Phase 1's
+exact NEES consistency test (N=100, 500 steps, dt=10s, ISS orbit, GPS
+σ=10m, Q_pos=1m, Q_vel=0.01 m/s) end-to-end through the new threaded
+`mc_runner.cpp` path, using `chi_squared_quantile()` for the bounds instead
+of hardcoded constants — passing this is strong evidence that both the
+threaded run distribution and the general bounds formula are correct, since
+it's an independent re-derivation of an already-known-good result through a
+different code path.
+
+Verified TSan-clean (`-DENABLE_TSAN=ON`, all `McRunner.*` tests) — expected,
+since there's no shared mutable state between threads during the parallel
+phase to race on in the first place, but worth confirming rather than
+assuming.
+
+8 tests in `test_mc_runner.cpp`: 2 for `chi_squared_quantile` (matches
+known bounds; median ≈ dof), output array sizing, determinism given a fixed
+seed, `n_runs` not evenly divisible by `k_mc_threads` (e.g. n_runs=3 with 4
+threads — some threads get zero runs, must not crash), KF and UKF
+`FilterKind` selection produce finite output, and the Phase 1 NEES
+reproduction above.
+
+**Benchmark (`bench_monte_carlo.cpp`):** full `run_monte_carlo()` campaign,
+N=1000 runs × 1000 steps, EKF, 4 threads: **141.6 ms**, consistent across
+repeated runs — 5.7x inside the `< 800 ms` CLAUDE.md §13 target. Cross-
+checked against a rough single-thread extrapolation (single EKF
+predict+update ≈0.26 μs × 1000 runs × 1000 steps ≈ 260 ms of pure filter
+compute alone, before the RK4 truth propagation and GPS sampling each step
+add to that) — landing at 142 ms across 4 threads is consistent with real
+parallel speedup, not just a fast single-thread baseline, though this is an
+estimate rather than a controlled 1-vs-4-thread measurement, since
+`k_mc_threads` is a fixed internal constant rather than an exposed
+parameter this session.
+
+### Step 3 — WebGL2 renderer (`earth.ts`, `orbit.ts`, `covariance.ts`, `panels.ts`)
+
+Raw WebGL2, no three.js or other 3D library — CLAUDE.md §4/§20 is explicit
+that this is the same approach Figma uses for its rendering engine, not a
+wrapper library, and the coding convention "all GL state changes in
+renderer/ files only" implies direct GL calls are the intended style. Added
+a small shared `renderer/gl_utils.ts` (not in CLAUDE.md's literal repo
+layout, but `earth.ts`/`orbit.ts`/`covariance.ts` all need the same
+shader-compile boilerplate and 4x4 matrix math, and writing that three
+times would violate the project's own simplification rule) — `mat4Identity`/
+`mat4Multiply`/`mat4Perspective`/`mat4LookAt`, `compileShader`/
+`createProgram`, and `SCENE_SCALE` (1 scene unit = 1 Earth radius, so
+`earth.ts`'s unit sphere and `orbit.ts`/`covariance.ts`'s ECI-meter
+positions all composite in one consistent scene).
+
+**`earth.ts`:** lat/lon UV sphere (48×96 bands), vertex+fragment shaders
+with Fresnel-based atmosphere rim glow (`pow(1-dot(N,V), 3)`, CLAUDE.md
+§12). Texture loading is async (`Image.onload`/`onerror`) and falls back to
+a flat ocean-blue color with the same Fresnel shading on failure, so the
+renderer never shows a blank/crashed sphere even if the texture is missing
+or fails to load.
+
+**`earth_8k.jpg` texture — sourced after explicit user confirmation, with
+two real mistakes caught before it actually worked.** The asset wasn't in
+the repo; per the standing instruction not to guess/generate URLs, this
+was raised to the user directly rather than picked silently. User chose
+"fetch a known NASA Blue Marble URL." Three specific Earth Observatory URLs
+recalled from memory (`eoimages.gsfc.nasa.gov/.../world.topo...jpg`,
+`.../world.200401...jpg`, etc.) all 404'd on `curl` — confirms the
+"don't guess URLs" instinct was right; instead used `WebSearch` +
+`WebFetch` against `visibleearth.nasa.gov` to find the actual current
+asset URLs, verified each with `curl -I` before downloading.
+
+*Mistake 1:* the first URL found
+(`.../BlueMarble_2005_Afr_03_lrg.jpg`) downloaded fine (200, valid JPEG)
+but turned out to be a pre-rendered orthographic *photo of a globe*
+(Africa-centered, transparent/white background, square 3735×3735) — not
+an equirectangular map. Caught by actually opening the downloaded image
+before wiring it in: a sphere already photographed as a sphere can't be
+UV-mapped onto another sphere without visible distortion. Went back to
+NASA's Blue Marble "base map" page specifically and found the real
+equirectangular asset: `.../bmng-base/january/world.200401.3x5400x2700.jpg`
+(5400×2700, exactly 2:1 — the correct projection for a lat/lon UV sphere).
+
+*Mistake 2:* even with the right asset in `web/public/earth_8k.jpg`,
+the renderer kept reporting "failed to load" — i.e. the existing
+fallback path silently went down the *wrong fork* convincingly enough to
+look like a still-missing file. Root cause this time: a **service worker
+left registered in the test browser profile from earlier in this
+session**, still serving its `orbitforge-v1` cache's stale recollection
+of `/earth_8k.jpg` from before the file existed (a 200-with-`text/html`
+SPA-fallback response Vite had served back then) — confirmed via
+`navigator.serviceWorker.getRegistrations()` showing an active
+registration despite `main.ts`'s `import.meta.env.DEV` guard (added a few
+steps earlier in this same phase) correctly preventing *new*
+registrations; the guard doesn't retroactively unregister one a prior
+test session already installed. `curl` against the dev server directly
+returned the correct image the whole time — this confirms the earlier
+Step 4 SW-caching gotcha is a recurring category, not a one-off, when
+iterating against a long-lived browser profile during manual/automated
+browser testing in this repo: **always check
+`navigator.serviceWorker.getRegistrations()` and `caches.keys()` first**
+when a fix "isn't taking effect," before assuming the fix is wrong.
+Unregistering the stale SW and clearing its cache made the texture load
+immediately; verified via screenshot — North America with visible snow
+cover, oceans, and the Fresnel atmosphere rim all rendering correctly.
+
+**`orbit.ts`:** one `GL_LINE_STRIP` per path (true/KF/EKF/UKF), each a
+capped circular history buffer (`MAX_POINTS_PER_PATH = 2048`) uploaded via
+`bufferSubData` only when dirty. CLAUDE.md §12 calls for the true path
+dashed; rendered solid white instead — true dashing needs a per-vertex
+"distance along path" attribute and discard-based stippling in the
+fragment shader, real complexity for a cosmetic distinction already covered
+by the true path's distinct color against the blue/teal/orange filter paths.
+
+**`covariance.ts` — known, documented gap vs. the literal spec.** CLAUDE.md
+§12 says "eigendecompose P[0:3,0:3] → 3 semi-axes → transform unit sphere."
+That needs the *full* 3×3 position covariance block including off-diagonal
+terms. `StateFrame` (`engine/include/wasm_api.hpp`, decided in Phase 2)
+only transmits the covariance **diagonal** (`kf_cov_diag` etc., 6 doubles:
+3 position + 3 velocity variances) — a deliberate bandwidth/simplicity
+choice made before this renderer existed. A diagonal matrix's eigenvectors
+are exactly the coordinate axes and its eigenvalues are the diagonal
+entries themselves, so what `covariance.ts` actually renders is an
+ECI-axis-aligned wireframe ellipsoid (semi-axes `3·sqrt(variance)` per
+axis), not a body-frame-oriented one from a true eigendecomposition. This
+is the right implementation *given the data StateFrame carries* — doing the
+literal spec would require changing `StateFrame` to carry off-diagonal
+terms too, a Phase 2 decision I didn't revisit this session. Documented in
+the file's header comment so nobody mistakes the axis-aligned ellipsoid for
+a bug later.
+
+**`panels.ts`:** added `chart.js` (^4.4.7) as the first real npm runtime
+dependency (previously only `vite`/`typescript` as devDependencies) — `npm
+install` came back with 0 vulnerabilities. Four streaming line charts
+(position error norm, velocity error norm, covariance trace, NIS), each
+fed from a capped 300-point ring buffer, `chart.js animation: false` so
+`chart.update()` calls don't fight the app's own 60fps loop. NIS bounds use
+the standard `chi2(3, 0.025) = 0.216` / `chi2(3, 0.975) = 9.348` table
+values directly — these are for a **single live run** (N=1, measurement
+dim=3), not the N-averaged bounds `mc_runner.cpp`'s `chi_squared_quantile()`
+computes for a Monte Carlo campaign (CLAUDE.md §8); the two are different
+statistics and don't share a formula instance in this codebase yet.
+
+**Dead end — flexbox layout bug found via the smoke test, not by
+inspection.** First draft of the `#layout` CSS used `#scene-canvas { flex:
+2 1 auto; width: 100%; ... }` and `#panels { flex: 1 1 320px; min-width:
+280px; ... }`. Screenshotted via a temporary Playwright-driven smoke test
+(see below) and the panels sidebar was rendering 288px wide but positioned
+*starting past the right edge of the 1400px viewport* — total layout width
+of 1371+288=1659px overflowing the container. Root cause: a flex item's own
+`width: 100%` together with `flex-basis: auto` creates a sizing dependency
+on the flex container's distributed space that doesn't resolve the way a
+non-flex `width:100%` would — a known flexbox gotcha. Fixed by switching to
+the standard deterministic sidebar pattern: `flex: 1 1 0%; min-width: 0`
+for the canvas (no content-based basis) and `flex: 0 0 320px` (fixed,
+non-growing, non-shrinking) for the sidebar. This was caught entirely by
+actually rendering it in a browser — `tsc --noEmit` and `vite build` both
+stayed green throughout, since this is a pure CSS/runtime layout issue, not
+a type error.
+
+**Verification approach:** no WASM build locally (same constraint as
+Phase 2 — no Emscripten toolchain), so the production `main.ts` →
+worker → WASM → ring buffer pipeline could not be exercised end-to-end.
+What *could* be verified: the renderer modules themselves are
+framework/WASM-agnostic exports, so a temporary harness
+(`web/test-renderer.html` + `.ts`, deleted after use, not committed) fed
+synthetic `StateFrame`-shaped data directly into `EarthRenderer`/
+`OrbitPathRenderer`/`CovarianceEllipsoidRenderer`/`PanelManager` and was
+loaded in a real browser via Playwright. Confirmed: Earth sphere renders
+with fallback color and visible Fresnel rim glow; orbit path renders as a
+visible line strip; covariance ellipsoids render as small markers along
+the path (correctly tiny — 3σ at a ~20km position std relative to a
+6378km Earth radius is genuinely a small fraction of the scene, which is
+accurate, not a bug); all four Chart.js panels render live, updating data
+including the NIS dashed bound lines. Console showed only the expected
+texture-404 fallback warning and an unrelated favicon 404. This verifies
+the renderer code is runtime-correct in a real browser; it does not verify
+the WASM-driven production data path, which remains untested locally and
+deferred to CI/manual testing once a WASM build is available.
+
+### Step 4 — `ui/scenario_editor.ts` + `ui/fault_panel.ts`
+
+`ScenarioEditor`: satellite `<select>` populated from `tle_feed.ts`'s
+`PRESETS`, a paste-TLE fallback textarea, GPS σ / sim-speed range sliders,
+J2/Drag/SRP checkboxes, and Run/Pause/Reset buttons — constructs a
+`ScenarioConfig` and calls the caller-supplied `postToWorker` callback,
+never `ccall` directly (CLAUDE.md §20). `FaultPanel`: one button per
+`FaultType`, default magnitudes from CLAUDE.md §9's table (GPS spike 500m,
+maneuver 5 m/s, drag error +50%, etc.). Every fault button uses
+`onsetT: 0` — `Simulation::step()` applies a fault once
+`t_now >= onset_t`, and since `sim_time` only increases from 0, `onset_t=0`
+always means "apply on the next tick" regardless of how long the
+simulation has already run, so there's no need for the UI to track or read
+back the current sim time at all.
+
+**Found and fixed a real, currently-broken bug in the pre-existing
+`tle_feed.ts` scaffold: the CelesTrak endpoint it called
+(`/satcat/tle.php?CATNR=`) was deprecated in 2020 and removed in 2022.**
+Confirmed live via `curl` — it now returns an HTML deprecation notice, not
+a TLE, which is exactly what made `parseTle()` throw "Invalid TLE line
+designators" (the HTML's first line obviously doesn't start with `1 `).
+This wasn't something a passing typecheck could have caught — `tle_feed.ts`
+typechecked fine throughout, the bug only showed up by actually loading the
+page and watching the satellite picker fail. Fixed by switching to
+CelesTrak's current GP-data API:
+`https://celestrak.org/NORAD/elements/gp.php?CATNR={id}&FORMAT=TLE`
+(verified via `curl` to return a clean 3-line name+TLE response, 70-char
+lines).
+
+**Dead end — the fix above didn't visibly work on the first reload, and
+the cause was the project's own service worker.** After editing
+`tle_feed.ts`, reloading still showed the same stale error — even after a
+full dev-server restart. Tracked it down by inspecting
+`navigator.serviceWorker.getRegistrations()` and `caches.keys()` in the
+running page: `sw.ts`'s cache-first strategy (`orbitforge-v1`) had already
+cached the old, broken module response and kept serving it regardless of
+server-side changes. Unregistering the SW and clearing its cache made the
+fix appear immediately. Fixed at the source rather than just clearing the
+cache once: `registerServiceWorker()` in `main.ts` now skips registration
+entirely when `import.meta.env.DEV` is true, so this can't recur during
+local development (added `"types": ["vite/client"]` to `tsconfig.json` for
+`import.meta.env`'s type). The SW still registers normally in production
+builds, which is the only place its offline-caching behavior is wanted.
+
+**Verification:** same Playwright-driven approach as Step 3, but this time
+against the real `main.ts` (not a synthetic harness) — `npm run dev`,
+navigate, read `.status-line` text via `page.evaluate`, confirmed it
+progresses from "Fetching TLE from CelesTrak..." to "Loaded ISS (ZARYA)"
+against the live CelesTrak API (real network call, not mocked). Console
+showed only the expected texture-fallback and manifest-icon warnings, no
+errors, after the SW/cache state was cleared once. The full Run → worker →
+WASM path remains unverified (no Emscripten locally, same as every prior
+WASM-touching step this phase) — clicking Run posts `init`+`start` to the
+worker, which will attempt to load the non-existent `/orbitforge.js` and
+fail; this is expected and matches the documented WASM-deferred-to-CI
+posture, not a new gap introduced here.
+
+### Step 4b — UI polish pass + camera drag fix (user feedback)
+
+User feedback after seeing the running app: UI "could be so much more
+responsive, cleaner, pop more," and dragging the Earth "can feel normal."
+Two separate problems, addressed separately.
+
+**Camera drag — root-caused, not just tweaked.** The arcball camera
+(`main.ts`'s `OrbitCamera`) used `mousedown`/`mousemove`/`mouseup` with no
+`preventDefault()`. That meant every drag was racing against the browser's
+own native text-selection/drag-image gesture — the actual cause of the
+"doesn't feel normal" complaint, not the rotation math itself. Also: the
+`mousemove` listener was attached to the canvas, not `window`, so dragging
+past the canvas edge silently stopped tracking; and there was no cursor
+feedback or release inertia, both of which read as "stiff" even when the
+rotation itself was working.
+
+Rewrote using the Pointer Events API with `setPointerCapture` (keeps
+receiving move events even if the pointer leaves the canvas mid-drag —
+the old approach's edge-tracking bug), `e.preventDefault()` on
+`pointerdown`/`pointermove` (stops the native drag/selection gesture from
+ever engaging), `grab`/`grabbing` cursor feedback, and a small inertia
+system: the last per-event angular delta becomes a velocity that decays
+by `0.92`/frame via a new `camera.update()` call added to the render loop,
+so releasing mid-drag continues the rotation briefly instead of stopping
+dead — verified via Playwright (`mouse.down` → `mouse.move` → `mouse.up`,
+screenshot immediately after release vs. ~600ms later) showing the globe
+visibly continuing to rotate after release and decaying smoothly. Also
+verified zero `window.getSelection()` text after a drag, confirming the
+old selection-fighting bug is actually gone, not just less visible.
+
+**Visual polish.** Invoked the `ui-ux-pro-max` skill for a dark
+technical-dashboard design system (`Inter` + `Fira Code` pairing — sans
+for UI text, mono for data/numbers, matching the "dashboard, data,
+analytics, precise" mood) rather than guessing at colors/spacing myself.
+Applied as CSS custom properties (semantic tokens: `--bg`, `--surface`,
+`--border`, `--text-muted`, `--accent-blue/teal/orange`, `--radius`,
+`--transition`) instead of the scattered hardcoded hex values from the
+first pass. Concrete changes: a real topbar with a brand mark (small glow
+dot) instead of a bare status line; each chart wrapped in a `.panel` card
+with its own `<h4>` title (`POSITION ERROR [m]`, etc.) so Chart.js legends
+could drop the repeated title-per-series text and just say `KF`/`EKF`/
+`UKF` — three chart panels' worth of redundant text removed, which alone
+accounts for a lot of the "pop more"/cleaner feedback; styled range-input
+sliders (custom track/thumb, since the unstyled native slider was one of
+the flatter-looking elements); button hover/active/focus-visible states
+with 150-200ms transitions (`prefers-reduced-motion` respected — all
+transitions disabled under that media query); a responsive breakpoint at
+900px that stacks the layout vertically instead of a fixed flex split that
+didn't adapt.
+
+**Color consistency fix.** The KF/EKF/UKF colors were defined three
+separate times with slightly different values: `orbit.ts`'s
+`PATH_COLORS`, `main.ts`'s inline covariance-ellipsoid color arguments,
+and `panels.ts`'s `FILTER_COLORS` for Chart.js — close but not identical
+RGB triples in each place, so the "same" filter could read as a subtly
+different shade in the 3D scene vs. the charts. Consolidated into one
+`FILTER_COLOR_RGB` constant in `gl_utils.ts`, imported by both `orbit.ts`
+and `main.ts`; `panels.ts` keeps its own copy in CSS-string form (Chart.js
+wants `'rgb(r,g,b)'` strings, not normalized floats) but the numbers now
+match the same `--accent-*` CSS tokens by construction, not by
+coincidence.
+
+**Dead end — the first version of the 900px breakpoint had a real overlap
+bug, caught only by measuring `getBoundingClientRect()`, not by looking at
+a screenshot.** First draft: `#layout{flex-direction:column}`,
+`#panels{flex:0 0 360px; ...2x2 grid...}`. A screenshot at 700px width
+looked like the Scenario card was overlapping the bottom two chart panels.
+Measuring the actual boxes confirmed it: `#panels` (360px, non-shrinking)
+plus `#scene-canvas` (which reused its row-layout `flex: 1 1 0%` rule
+unchanged) inside `#layout`'s 455px box. The default `min-height: auto` on
+a flex item can lock a `<canvas>` to its last-rendered intrinsic height
+when flex-direction flips from row to column — `min-width: 0` (already
+present, needed for the row case) doesn't cover the column case, so
+`scene-canvas` refused to shrink and both children overflowed `#layout`'s
+box, with `#panels` visually landing on top of `#controls` underneath.
+Fixed by giving `#scene-canvas` a fixed `280px` height at this breakpoint
+instead of fighting for flex space, and switching the whole mobile layout
+from "fit everything into one 100vh viewport" to a normal scrolling
+document (`html, body, #app { height: auto; min-height: 100% }`) — a more
+robust pattern for a data-dense dashboard on a small screen than cramming
+four chart panels and two control cards into whatever's left after a 3D
+viewport. Re-verified with the same `getBoundingClientRect()` check (no
+overlaps) plus a full-page screenshot at 700×900 showing all 4 panels in
+a legible 2×2 grid, the globe at a reasonable size, and both control cards
+stacked below with normal page scroll. Re-checked 1440×900 afterward to
+confirm the media-query-only change didn't touch desktop.
+
+Typecheck and `vite build` both clean throughout.
+
+### Step 4c — starfield backdrop (user feedback)
+
+User: make the scene background "look starry like the solar system than
+just black... reflective of our realistic solar system." Read as wanting
+a believable deep-space backdrop, not a literal multi-planet solar-system
+renderer — OrbitForge stays an Earth-orbit estimation tool per CLAUDE.md
+§18.
+
+Added `renderer/starfield.ts`: a procedural starfield, not a real star
+catalog (no RA/Dec data) — ~3500 dim background stars from uniform-sphere
+point picking (not uniform lat/lon, which visibly clusters at the poles),
+a denser/brighter band along a tilted great circle standing in for the
+Milky Way, and 40 brighter foreground stars, all from a fixed seed
+(mulberry32 PRNG) so the sky is stable across reloads rather than
+reshuffling on every refresh. Rendered as `GL_POINTS` with a
+circular-falloff fragment shader (square points read as "pixelated," not
+"stars"). Added `mat4StripTranslation()` to `gl_utils.ts` to zero a view
+matrix's translation column, rendering the star sphere as though at
+infinite distance — without it, zooming toward Earth would make the
+stars visibly drift/approach, which reads as wrong (real stars don't get
+closer when you zoom in on a nearby planet). Rendered first each frame,
+before Earth, so the depth test naturally occludes stars behind the
+globe — confirmed via screenshot that none show through the planet.
+
+**Milky Way band — tuned twice, accepted as subtle rather than chased
+further.** The band is rejection-sampled (keep points within a threshold
+angular distance of a tilted plane through the origin) with
+brightness/size increasing toward the plane. Verified the geometry is
+sound, including aiming the camera at an angle computed to be
+perpendicular to the band's normal vector (so the view looks straight
+down the band, the angle that should make it span the widest swath of
+sky) and screenshotting from exactly that angle. Even after boosting
+density (2200→6000 points) and brightness (0.08-0.43→0.35-0.80, scaled by
+falloff) twice, the band reads as texture rather than an obviously
+distinct bright streak. Decided not to keep iterating on this alone: the
+resulting sky — dense, varied-brightness, varied-size scattered stars —
+already reads as a convincing, realistic deep-space backdrop, which was
+the actual ask. A sharper band is a nice-to-have, not a gap, and "does
+this look good enough" is a visual call better left to the user's own
+eyes than to further solo iteration.
+
+Typecheck clean after both tuning passes.
+
+### Step 5 — Monte Carlo wired into the WASM API + UI
+
+Previously deferred because CLAUDE.md §21's `run_monte_carlo(n_runs, seed)`
+signature carries no `n_steps`/`dt`/filter-kind, and `ScenarioCfg` has no
+`duration` field — there was no way to know the real result shape without
+deciding those gaps first. Decided them now, each documented at the
+decision site rather than left implicit:
+
+- **Always EKF.** KF is the intentionally-divergent demo filter (CLAUDE.md
+  §6) — running a consistency campaign against a filter that's *supposed*
+  to diverge defeats the point. UKF is ~2.5x the per-step cost
+  (`docs/benchmarks.md`) for the same consistency question EKF already
+  answers. CLAUDE.md §21 gives `run_monte_carlo` no filter-selection
+  argument, so EKF is the one defensible default, not an arbitrary one.
+  Documented on `Simulation::run_monte_carlo`'s declaration in
+  `wasm_api.hpp`.
+- **`n_steps=500, dt=10s` fixed, not configurable.** Matches the
+  Phase-1-validated setup (`test_filter_consistency.cpp`,
+  `McRunner.EkfNeesConsistencyMatchesPhase1Result`) — one
+  ISS-orbit-scale campaign (~83 min sim time) per run. Not configurable
+  because nothing in the §21 API or `ScenarioCfg` carries a duration to
+  configure it with; inventing a new parameter not in the spec felt like
+  the wrong kind of gap to fill silently.
+- **MC uses the scenario's *initial* true state, not the live one.**
+  Added `x_true_initial_` to `Simulation`, snapshotted once in
+  `init_scenario()` alongside the mutating `x_true_`. Running MC after the
+  live sim has been stepping for a while shouldn't make the campaign start
+  from wherever the live trajectory happens to be — a Monte Carlo
+  consistency check is about the filter's response to a *given* initial
+  condition, not a moving target.
+- **`run_monte_carlo()` pauses any running live simulation first.** Real
+  concurrency hazard, not a hypothetical one: the engine's MC runner
+  spawns its own `monte_carlo::k_mc_threads` (4) worker threads
+  (`mc_runner.cpp`), and the WASM build's `PTHREAD_POOL_SIZE` is sized to
+  match exactly that. If the live sim's own background thread
+  (`Simulation::run_loop`) were also running, that's 5 threads needed
+  against a 4-slot pool — a real deadlock risk under Emscripten pthreads,
+  not just inefficiency. `pause()` first removes the 5th contender instead
+  of trying to grow the pool to cover a case that's avoidable.
+
+**Engine-side data shape — added a real histogram, not a synthetic one.**
+CLAUDE.md §12's MC panel mockup lists `[Histogram] [RMS table]
+[NEES/NIS consistency]` as three separate widgets, but `MCStats` (as it
+existed) only carried per-step *aggregates* across runs — nothing to
+histogram per-run. Rather than fake one, extended `MCStats` with
+`final_pos_err` (size `n_runs`, the final-step `|r_true - r_hat|` per run)
+and threaded it through `PartialSums`/`run_one`/`run_slice`/
+`run_monte_carlo()` in `mc_runner.cpp`, ordered by run index (not thread
+completion order — verified by
+`McRunner.FinalPosErrIndexedByRunOrderNotCompletionOrder`, which
+reproduces one run in isolation and checks it lands at the same index in
+a 9-run campaign with uneven thread slices). Also added
+`nees_bounds(n_runs)`/`nis_bounds(n_runs)` (CLAUDE.md §8's
+`chi2(6N,·)/N` and `chi2(3N,·)/N` formulas) so the UI doesn't need to
+reimplement the bounds math — verified against the same `[5.35, 6.69]`
+reference `ChiSquaredQuantile.MatchesKnownNeesBounds` already used.
+
+**WASM bindings** (`wasm_api.cpp`): `run_monte_carlo(int n_runs, int seed)`
+matches CLAUDE.md §21 exactly. `get_mc_results()` doesn't exist as a
+single binding — ccall can't return a struct, so it's split into the same
+pointer+count pattern the ring buffer already uses:
+`get_mc_n_steps`/`get_mc_n_runs` (counts) plus
+`get_mc_rms_pos_ptr`/`get_mc_rms_vel_ptr`/`get_mc_nees_ptr`/`get_mc_nis_ptr`/
+`get_mc_final_pos_err_ptr` (raw `uintptr_t` into the `MCStats` stored on
+the global `Simulation`, valid until the next `run_monte_carlo()` call)
+plus `get_mc_nees_lower/upper`/`get_mc_nis_lower/upper` (scalars). New
+native tests: `Simulation.RunMonteCarloProducesCorrectlySizedFiniteResults`,
+`RunMonteCarloIsDeterministicGivenSameSeed`,
+`RunMonteCarloPausesAnyRunningLiveSimulation`, plus the free-function-API
+equivalent — 84/84 native tests passing (was 81).
+
+**Web side**: `worker.ts` gained a `run_monte_carlo` request type — calls
+`ccall('run_monte_carlo', ...)` (blocks the *worker* thread for the
+campaign's duration, not the main UI thread, exactly the architecture
+CLAUDE.md §4 separates threads for), then copies the result arrays out of
+`module.HEAPF64` via the pointers immediately, before any other ccall can
+reallocate them, and posts a plain-data `mc_results` message back.
+`ui/mc_results.ts` is a `<details>`-based collapsed-by-default panel
+(native disclosure widget — keyboard-accessible, no extra JS needed)
+with a Runs slider (100-5000), a bar-chart histogram of
+`finalPosErrPerRun`, an actual `<table>` for RMS at 4 time fractions (a
+literal table, not another line chart, since the mockup calls out
+"table" specifically), and two bounded line charts for NEES/NIS using
+*this campaign's* `neesLower/Upper`/`nisLower/Upper` — distinct from
+`panels.ts`'s fixed single-run `chi2(3)` bounds, since MC bounds
+genuinely depend on `n_runs`. Verified visually via Playwright with
+injected synthetic `MCStats` (no local WASM build to drive it for real):
+expand/collapse works, histogram/table/both charts render with sane
+values, responsive 2-column layout at the 900px breakpoint.
+
+Typecheck and `vite build` both clean.
+
+### Step 6 — All 5 satellite presets verified end-to-end
+
+The TLE-fetch/parse/UI portion of this is real-network-testable without a
+WASM build (only the downstream physics-engine path is blocked on the
+missing Emscripten toolchain), so it was actually run rather than left as
+an open item.
+
+**Found and fixed a real bug: STARLINK-1007 (NORAD 44713) has deorbited.**
+`curl`'ing CelesTrak's GP-data API for all 5 presets' NORAD IDs (the same
+endpoint `tle_feed.ts` calls, fixed in Step 4) returned valid TLEs for 4 of
+5 — `CATNR=44713` returned `No GP data found`, CelesTrak's response for an
+object no longer tracked. Confirmed via CelesTrak's `GROUP=starlink` GP
+listing that STARLINK-1007's batch-mate STARLINK-1008 (NORAD 44714) is
+still active with a closely matching orbit (53.15° inclination, 15.50
+rev/day mean motion — consistent with the original "550 km, 53°" preset
+description). Swapped the preset in `tle_feed.ts` to NORAD 44714 with the
+same "550 km, 53°, high A/m, drag dominates" description, which still
+applies.
+
+**Verification approach:** ran the actual `parseTle()`/`fetchTleByNorad()`
+logic (not a reimplementation) against live CelesTrak responses for all 5
+corrected NORAD IDs via Node 24's native TypeScript stripping
+(`node -e "import('./tle_parser.ts')..."`), confirming sane orbital
+elements for each (ISS 51.6°, Starlink-1008 53.15°, GPS BIIR-2 55.1°/12hr
+mean motion, GOES-16 0.34° near-equatorial GEO, debris 74.2° high
+inclination). Then drove the real `ScenarioEditor` UI in a browser via
+Playwright — selected each of the 5 dropdown options in turn and confirmed
+the status line reaches `Loaded <name>` for all five (initial test run was
+confounded by page navigations aborting in-flight fetches mid-test,
+producing false "still fetching" reads; re-ran cleanly against a single
+stable page load with the test polling the status line to completion
+rather than reading it once after a fixed delay).
+
+This closes the "all 5 satellite presets working end-to-end" item to the
+extent verifiable without Emscripten: TLE fetch, parse, and UI wiring are
+confirmed correct against live data for all 5. Clicking "Run" still
+requires the WASM module (`/orbitforge.js`), which doesn't exist locally —
+that remains deferred to CI, unchanged from every previous WASM-touching
+step this phase.
+
+Typecheck and `vite build` both clean.
+
+### Step 7 — Phase 4 triage: deploy.yml, math.md, benchmarks.md, README, architecture.md, PWA icons
+
+Before editing anything, read all five Phase 4 checklist items against
+what actually exists, to avoid redoing work that was already done in
+earlier phases:
+
+- `deploy.yml` already matches CLAUDE.md §15 exactly (checkout, Emscripten
+  SDK cache+install, `build_wasm.sh`, Vite build, `cloudflare/pages-action`).
+  Nothing to change in the workflow file itself — what's missing is
+  account-side: the `CLOUDFLARE_API_TOKEN`/`CLOUDFLARE_ACCOUNT_ID` repo
+  secrets and an actual Cloudflare Pages project named `orbitforge`, both
+  of which only the repo owner can create.
+- `docs/math.md` is already comprehensive (EOM, RK4/RK45 with full
+  Dormand-Prince tableau, two-body + J2 Jacobians with all 9 entries,
+  SR-UKF sigma points/Cholesky update, GPS/IMU/magnetometer models, NEES
+  MC methodology). Cross-checked every `math.md §...` citation appearing
+  in engine source comments (21 total, across `eom.cpp`, `ekf.cpp`,
+  `ukf.cpp`, `magnetometer.cpp`, etc.) against the file — every citation
+  points at a section that actually exists and matches. No edits needed.
+- `docs/benchmarks.md` is already complete for what's measurable locally:
+  full Phase 1 native numbers (RK4 0.149µs, EKF 0.247µs, UKF 1.292µs, 3
+  filters/tick 1.655µs, MC 1000×1000 141.6ms, ring buffer 5.74×10⁸/sec,
+  SoA +484.9% over AoS), with the WASM-overhead row honestly marked
+  "not measured — no local Emscripten toolchain" rather than faked. No
+  edits needed.
+- `README.md` was genuinely stale: Phase 3 checkbox still unchecked
+  despite Phase 3 being fully done (Steps 1–6 above), and an "Architecture"
+  section linking to `docs/architecture.md`, which didn't exist. Fixed
+  both, added a real "Web (TypeScript + WASM)" build section (previously
+  the README only documented the Phase 1 native C++ build), and added a
+  real screenshot of the running app.
+- `docs/architecture.md` didn't exist. Created it as a public-facing
+  companion to CLAUDE.md's architecture sections (thread model, TLE→filter
+  data flow, ring buffer, pool allocator, SoA Monte Carlo, fault
+  injection) — written from and cross-checked against the actual
+  `wasm_api.hpp`/`ring_buffer.hpp` source, not copied from CLAUDE.md's
+  plan, since the plan and the as-built code aren't guaranteed to agree
+  in every detail (CLAUDE.md itself is gitignored and never shipped, so a
+  public architecture doc needs to stand on its own anyway).
+- `web/public/manifest.json` references `icon-192.png`/`icon-512.png`,
+  neither of which existed — confirmed via a Playwright console check in
+  an earlier session ("Error while trying to use the following icon from
+  the Manifest... Download error or resource isn't a valid image") and
+  reconfirmed missing via `ls`. No image library is available locally
+  (no Pillow, no ImageMagick/`convert`/`rsvg-convert` — only `sips`, which
+  converts but doesn't generate from nothing). Wrote a small
+  `scripts/gen_icons.py` that hand-encodes a PNG (manual IHDR/IDAT/IEND
+  chunks via stdlib `zlib`/`struct`, no dependencies) drawing a simple
+  planet+orbit+satellite glyph in the manifest's own background/theme
+  color (`#0a0a0f`) plus the renderer's orbit-path accent colors.
+  Generated both sizes, verified with `sips -g pixelWidth -g pixelHeight`
+  and `file` that both are valid 192×192/512×512 RGBA PNGs, then
+  reconfirmed via a fresh Playwright page load that the manifest-icon
+  console warning is gone.
+
+**Screenshot verification:** started the real `vite dev` server (not a
+synthetic test harness) and loaded the actual production `index.html` —
+confirmed via console messages that a fresh navigation has zero
+errors/warnings (the manifest-icon warning seen in scrollback was from
+page loads before the icon files existed; an unrelated `MCResultsPanel
+appendChild null` error in scrollback was leftover from a prior session's
+stale HMR-reloaded module, not from a clean load — reproduced a clean
+load immediately after to confirm it doesn't recur). Captured
+`docs/screenshots/main-view.png` from this clean load: Earth renderer,
+scenario editor, fault injection panel, and the four chart panels are all
+real, current UI — not mocked. Charts are empty because no WASM module is
+present locally to drive the simulation loop, which is the same
+constraint noted for every WASM-touching step since Phase 2.
+
+### Next
+
+Outreach (posting to r/spacex, r/aerospace, AIAA listservs, Spaceshot
+Rocketry) is the one remaining Phase 4 checklist item, and it's a manual,
+external action for the project owner — not something to automate.
+Otherwise Phase 4 is done to the extent verifiable without a real
+Emscripten/Cloudflare account setup. A demo GIF would need a live WASM
+build actually driving the sim loop to be worth recording; that's the
+next thing worth doing once Emscripten is available (CI, or installed
+locally).

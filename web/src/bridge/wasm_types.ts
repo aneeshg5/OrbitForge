@@ -62,6 +62,14 @@ export interface MCStats {
   rmsVelPerStep: number[];
   neesPerStep: number[];
   nisPerStep: number[];
+  finalPosErrPerRun: number[]; // |r_true - r_hat| at the last step, one entry per run, meters
+  // 95% consistency bounds for this campaign's n_runs — unlike
+  // panels.ts's single-run NIS bounds, these genuinely depend on n_runs
+  // (chi2(6*n_runs)/n_runs and chi2(3*n_runs)/n_runs).
+  neesLower: number;
+  neesUpper: number;
+  nisLower: number;
+  nisUpper: number;
 }
 
 // WASM module interface — populated by Emscripten glue after load

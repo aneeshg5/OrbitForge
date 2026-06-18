@@ -62,6 +62,6 @@ TEST(PoolAllocator, DeallocateThenAllocateReturnsSameBlock) {
 }
 
 // No EXPECT_DEATH test for the double-free assert: fork()-based GTest death
-// tests hang under this environment's sandboxed shell — see docs/checkpoint.md
-// Phase 2 notes. Double-free correctness is covered above by
-// FillFreeRefillNoDoubleFreeCorrectReuse (every reused block is distinct).
+// tests hang under a sandboxed shell. Double-free correctness is covered
+// above by FillFreeRefillNoDoubleFreeCorrectReuse (every reused block is
+// distinct).

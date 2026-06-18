@@ -9,7 +9,7 @@
 
 namespace orbitforge {
 
-// Configuration passed from JS to init_scenario() (CLAUDE.md §21).
+// Configuration passed from JS to init_scenario().
 struct ScenarioCfg {
     char   tle_line1[70]{};
     char   tle_line2[70]{};
@@ -118,8 +118,8 @@ inline double solve_kepler_eccentric_anomaly(double mean_anomaly_rad, double ecc
 // standard two-body COE2RV transform (Vallado, "Fundamentals of
 // Astrodynamics and Applications", Algorithm 10).
 //
-// Deliberate simplification (CLAUDE.md §5/§18): this seeds the *initial*
-// true-trajectory state only. Full SGP4 was not used here because SGP4 is a
+// Deliberate simplification: this seeds the *initial* true-trajectory state
+// only. Full SGP4 was not used here because SGP4 is a
 // forward propagator, not a truth-model seed — OrbitForge's RK4 +
 // perturbations take over immediately after this single conversion. The
 // resulting epoch-state error vs. a full SGP4 seed is O(100 m), well inside

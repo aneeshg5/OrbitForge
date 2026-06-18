@@ -28,8 +28,6 @@ if [ -z "${EIGEN_INCLUDE:-}" ]; then
     exit 1
 fi
 
-# mc_runner.cpp (Phase 3, Monte Carlo) doesn't exist yet — add it back to
-# this list once engine/src/monte_carlo/mc_runner.cpp is built.
 em++ \
     -std=c++17 \
     -O3 \
@@ -49,6 +47,7 @@ em++ \
     "$ENGINE_DIR/src/filters/ekf.cpp" \
     "$ENGINE_DIR/src/filters/ukf.cpp" \
     "$ENGINE_DIR/src/sensors/magnetometer.cpp" \
+    "$ENGINE_DIR/src/monte_carlo/mc_runner.cpp" \
     "$ENGINE_DIR/src/wasm_api.cpp" \
     -o "$OUT_DIR/orbitforge.js"
 

@@ -3,7 +3,7 @@ import type { StateFrame } from './wasm_types.js'
 // sizeof(StateFrame) in bytes — must match C++ struct (engine/include/wasm_api.hpp).
 // 46 doubles (1 simTime + 3+3 true + (3+3+6+1)×3 filters = 46) × 8 bytes = 368,
 // + 1 byte activeFault padded up to the next 8-byte boundary = 376 bytes.
-// Verified against the compiler's sizeof(StateFrame): see docs/checkpoint.md.
+// Verified against the compiler's sizeof(StateFrame).
 const FRAME_BYTES = 376
 
 // Offsets (in doubles, i.e. byte_offset / 8) for each field in StateFrame.

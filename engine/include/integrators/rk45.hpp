@@ -71,7 +71,7 @@ std::pair<State, double> rk45_try_step(
 }
 
 // Integrate from t0 to t1 using adaptive Dormand-Prince RK45 (math.md §2.2).
-// Defaults match CLAUDE.md §6: atol=1e-6 m, rtol=1e-9.
+// Defaults: atol=1e-6 m, rtol=1e-9.
 template <typename State, typename Dynamics>
 State rk45_integrate(
     const State& x0, double t0, double t1, Dynamics&& f,

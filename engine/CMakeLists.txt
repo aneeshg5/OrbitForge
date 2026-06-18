@@ -48,6 +48,7 @@ set(ENGINE_SOURCES
     src/filters/ukf.cpp
     src/sensors/magnetometer.cpp
     src/wasm_api.cpp
+    src/monte_carlo/mc_runner.cpp
 )
 
 # Test target
@@ -66,6 +67,8 @@ add_executable(orbitforge_tests
     tests/test_scenario.cpp
     tests/test_fault_injector.cpp
     tests/test_wasm_api.cpp
+    tests/test_ensemble.cpp
+    tests/test_mc_runner.cpp
 )
 target_include_directories(orbitforge_tests PRIVATE include)
 target_link_libraries(orbitforge_tests PRIVATE GTest::gtest_main Eigen3::Eigen Threads::Threads)
@@ -78,6 +81,7 @@ add_executable(orbitforge_benchmarks
     ${ENGINE_SOURCES}
     benchmarks/bench_integrator.cpp
     benchmarks/bench_filters.cpp
+    benchmarks/bench_monte_carlo.cpp
 )
 target_include_directories(orbitforge_benchmarks PRIVATE include)
 target_link_libraries(orbitforge_benchmarks PRIVATE Eigen3::Eigen Threads::Threads)

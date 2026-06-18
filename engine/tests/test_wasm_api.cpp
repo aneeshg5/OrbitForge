@@ -214,8 +214,8 @@ TEST(Simulation, ManeuverFaultChangesTrueVelocityOnce) {
     EXPECT_EQ(after.active_fault, static_cast<uint8_t>(FaultType::maneuver));
 }
 
-// Exercises the literal exported free-function surface from CLAUDE.md §21
-// (the global-singleton layer EMSCRIPTEN_BINDINGS wraps), as opposed to the
+// Exercises the literal exported free-function surface (the global-singleton
+// layer EMSCRIPTEN_BINDINGS wraps), as opposed to the
 // Simulation class directly used by every test above.
 TEST(WasmFreeFunctionApi, MatchesSimulationBehavior) {
     using namespace orbitforge;
@@ -240,6 +240,59 @@ TEST(WasmFreeFunctionApi, MatchesSimulationBehavior) {
 
     reset_simulation();
     EXPECT_DOUBLE_EQ(get_sim_time(), 0.0);
+}
+
+TEST(Simulation, RunMonteCarloProducesCorrectlySizedFiniteResults) {
+    Simulation sim;
+    sim.init_scenario(iss_like_cfg());
+
+    constexpr size_t k_n_runs = 20;
+    sim.run_monte_carlo(k_n_runs, 123);
+
+    const auto& stats = sim.get_mc_results();
+    EXPECT_EQ(sim.get_mc_n_runs(), k_n_runs);
+    EXPECT_EQ(stats.rms_pos.size(), 500u);
+    EXPECT_EQ(stats.rms_vel.size(), 500u);
+    EXPECT_EQ(stats.nees.size(), 500u);
+    EXPECT_EQ(stats.nis.size(), 500u);
+    EXPECT_EQ(stats.final_pos_err.size(), k_n_runs);
+    for (double v : stats.rms_pos) EXPECT_TRUE(std::isfinite(v));
+    for (double v : stats.nees) EXPECT_TRUE(std::isfinite(v) && v > 0.0);
+    for (double v : stats.final_pos_err) EXPECT_TRUE(std::isfinite(v) && v >= 0.0);
+}
+
+TEST(Simulation, RunMonteCarloIsDeterministicGivenSameSeed) {
+    Simulation sim;
+    sim.init_scenario(iss_like_cfg());
+
+    sim.run_monte_carlo(10, 555);
+    const auto a = sim.get_mc_results().nees;
+    sim.run_monte_carlo(10, 555);
+    const auto b = sim.get_mc_results().nees;
+
+    ASSERT_EQ(a.size(), b.size());
+    for (size_t i = 0; i < a.size(); ++i) EXPECT_DOUBLE_EQ(a[i], b[i]);
+}
+
+TEST(Simulation, RunMonteCarloPausesAnyRunningLiveSimulation) {
+    Simulation sim;
+    sim.init_scenario(iss_like_cfg());
+    sim.start();
+    ASSERT_TRUE(sim.is_running());
+
+    sim.run_monte_carlo(4, 1);
+
+    EXPECT_FALSE(sim.is_running());
+}
+
+TEST(WasmFreeFunctionApi, RunMonteCarloMatchesSimulationBehavior) {
+    using namespace orbitforge;
+
+    init_scenario(iss_like_cfg());
+    run_monte_carlo(8, 99);
+
+    EXPECT_EQ(get_mc_n_runs(), 8u);
+    EXPECT_EQ(get_mc_results().final_pos_err.size(), 8u);
 }
 
 TEST(Simulation, DragCoeffErrorFaultShiftsTrueDragOnly) {

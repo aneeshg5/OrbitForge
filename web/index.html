@@ -5,9 +5,283 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OrbitForge — Live Spacecraft State Estimation</title>
   <link rel="manifest" href="/manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #060810;
+      --surface: #0c0f1a;
+      --surface-2: #111626;
+      --border: #232a40;
+      --border-strong: #323a56;
+      --text: #e8ebf3;
+      --text-muted: #8891a8;
+      --text-faint: #5b6378;
+
+      --accent-blue: #5b8cff;   /* KF */
+      --accent-teal: #2dd9c4;   /* EKF */
+      --accent-orange: #f7a93e; /* UKF */
+      --accent-primary: #3b82f6;
+      --accent-danger: #ef5a6f;
+
+      --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
+      --font-mono: 'Fira Code', 'SF Mono', monospace;
+
+      --radius: 8px;
+      --transition: 160ms ease-out;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font-ui);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    #app { display: flex; flex-direction: column; height: 100%; }
+
+    #topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      flex: 0 0 auto;
+    }
+    #brand {
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.02em;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #brand::before {
+      content: '';
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent-blue);
+      box-shadow: 0 0 8px var(--accent-blue);
+    }
+    #status { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+
+    #layout { display: flex; flex: 1 1 auto; min-height: 0; }
+    #scene-canvas { flex: 1 1 0%; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
+
+    #panels {
+      flex: 0 0 320px;
+      display: grid;
+      grid-template-rows: repeat(4, 1fr);
+      gap: 8px;
+      padding: 8px;
+      border-left: 1px solid var(--border);
+      overflow-y: auto;
+    }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 10px 4px;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      transition: border-color var(--transition);
+    }
+    .panel:hover { border-color: var(--border-strong); }
+    .panel-title {
+      margin: 0 0 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+    .panel-title .unit { font-weight: 400; text-transform: none; color: var(--text-faint); }
+    .panel canvas { flex: 1 1 auto; min-height: 0; width: 100% !important; height: 100% !important; }
+
+    #controls {
+      flex: 0 0 auto;
+      display: flex;
+      gap: 12px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+      overflow-y: auto;
+      max-height: 240px;
+    }
+    .control-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+    }
+    .control-card h3 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .scenario-editor, .fault-panel { display: flex; flex-direction: column; gap: 8px; font-size: 13px; flex: 1 1 auto; }
+    .scenario-editor .row { display: flex; align-items: center; gap: 8px; }
+    .scenario-editor .row label { color: var(--text-muted); min-width: 64px; font-size: 12px; }
+    .fault-panel { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
+
+    button {
+      font-family: var(--font-ui);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background var(--transition), border-color var(--transition), transform var(--transition);
+    }
+    button:hover { background: #182038; border-color: var(--accent-primary); }
+    button:active { transform: scale(0.97); }
+    button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+    select, textarea, input[type='range'] {
+      font-family: var(--font-ui);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+    }
+    select, textarea { padding: 5px 8px; font-size: 12px; }
+    textarea { resize: vertical; font-family: var(--font-mono); }
+    select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+    input[type='range'] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 4px;
+      background: var(--border-strong);
+      border: none;
+      border-radius: 2px;
+      flex: 1 1 auto;
+      cursor: pointer;
+    }
+    input[type='range']::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-primary);
+      box-shadow: 0 0 0 2px var(--bg);
+      transition: transform var(--transition);
+    }
+    input[type='range']::-webkit-slider-thumb:hover { transform: scale(1.15); }
+    input[type='range']::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent-primary);
+      border: none;
+    }
+
+    .scenario-editor label:has(input[type='checkbox']) {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-muted);
+      font-size: 12px;
+      min-width: 0;
+    }
+
+    .status-line { color: var(--text-faint); font-size: 11px; font-family: var(--font-mono); min-height: 14px; }
+
+    /* Monte Carlo panel: collapsed by default via a native <details>
+       element — keyboard-accessible disclosure with no extra JS. */
+    #mc-results-container { border-top: 1px solid var(--border); flex: 0 0 auto; }
+    .mc-panel summary {
+      cursor: pointer;
+      padding: 10px 16px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      list-style: none;
+    }
+    .mc-panel summary::-webkit-details-marker { display: none; }
+    .mc-panel summary::before { content: '▸ '; }
+    .mc-panel[open] summary::before { content: '▾ '; }
+    .mc-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+    .mc-charts-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; height: 200px; }
+    .mc-charts-row .panel canvas { flex: 1 1 auto; min-height: 0; }
+    .mc-rms-table { width: 100%; font-size: 11px; font-family: var(--font-mono); color: var(--text-muted); border-collapse: collapse; }
+    .mc-rms-table th, .mc-rms-table td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--border); }
+    .mc-rms-table th:first-child, .mc-rms-table td:first-child { text-align: left; }
+
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; }
+    }
+
+    @media (max-width: 900px) {
+      /* Below this width, stop fitting the whole dashboard into one fixed
+         100vh viewport (that's what squeezed the globe to ~95px tall in
+         the first version of this breakpoint — #panels' fixed height left
+         #scene-canvas only the leftover space) and let the page scroll
+         instead: each section gets a sensible fixed/min height and the
+         document grows normally. This is the more robust pattern for a
+         data-dense dashboard on a small screen — verified by measuring
+         getBoundingClientRect() for #layout/#panels/#controls/#scene-canvas
+         at 700px width after the fix, not by eyeballing a screenshot. */
+      html, body, #app { height: auto; min-height: 100%; }
+      #layout { flex-direction: column; }
+      #scene-canvas { min-height: 280px; flex: 0 0 280px; }
+      /* 2x2 grid instead of 4 stacked rows — at this width, 4 stacked
+         rows squeeze each chart to ~60px tall and become illegible. */
+      #panels { flex: 0 0 360px; grid-template-rows: repeat(2, 1fr); grid-template-columns: repeat(2, 1fr); border-left: none; border-top: 1px solid var(--border); }
+      #controls { flex-direction: column; max-height: none; }
+      .mc-charts-row { grid-template-columns: repeat(2, 1fr); height: auto; }
+      .mc-charts-row .panel { height: 200px; }
+    }
+  </style>
 </head>
 <body>
-  <div id="app"></div>
+  <div id="app">
+    <div id="topbar">
+      <div id="brand">OrbitForge</div>
+      <div id="status">loading...</div>
+    </div>
+    <div id="layout">
+      <canvas id="scene-canvas"></canvas>
+      <div id="panels">
+        <div class="panel">
+          <h4 class="panel-title">Position Error <span class="unit">[m]</span></h4>
+          <canvas id="pos-err-canvas"></canvas>
+        </div>
+        <div class="panel">
+          <h4 class="panel-title">Velocity Error <span class="unit">[m/s]</span></h4>
+          <canvas id="vel-err-canvas"></canvas>
+        </div>
+        <div class="panel">
+          <h4 class="panel-title">Covariance Trace</h4>
+          <canvas id="cov-trace-canvas"></canvas>
+        </div>
+        <div class="panel">
+          <h4 class="panel-title">NIS <span class="unit">(consistency)</span></h4>
+          <canvas id="nis-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+    <div id="controls">
+      <div id="scenario-editor-container" class="control-card"></div>
+      <div id="fault-panel-container" class="control-card"></div>
+    </div>
+    <div id="mc-results-container"></div>
+  </div>
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

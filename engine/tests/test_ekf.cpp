@@ -39,7 +39,7 @@ static ExtendedKalmanFilter make_ekf() {
 }
 
 TEST(EKF, PredictIncreasesCovariance) {
-    // Without measurements, det(P) must strictly increase (CLAUDE.md §14).
+    // Without measurements, det(P) must strictly increase.
     // Q_pos = 1 m² makes the increase detectable above double-precision rounding.
     ExtendedKalmanFilter ekf = make_ekf();
     const double det_before = ekf.P.determinant();

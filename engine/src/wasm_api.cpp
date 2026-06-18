@@ -55,6 +55,7 @@ void Simulation::init_scenario(const ScenarioCfg& cfg) {
     const EciState initial = tle_elements_to_eci(elem);
     x_true_.head<3>() = initial.pos;
     x_true_.tail<3>() = initial.vel;
+    x_true_initial_ = x_true_;
 
     perturb_nominal_.enable_j2    = cfg.enable_j2;
     perturb_nominal_.enable_drag  = cfg.enable_drag;
@@ -95,6 +96,24 @@ void Simulation::reset() {
 
 void Simulation::set_fault(const faults::FaultConfig& cfg) {
     fault_queue_.set(cfg);
+}
+
+void Simulation::run_monte_carlo(size_t n_runs, int seed) {
+    pause();  // see run_monte_carlo()'s declaration comment in wasm_api.hpp
+
+    monte_carlo::MCConfig mc_cfg;
+    mc_cfg.n_runs  = n_runs;
+    mc_cfg.n_steps = 500;
+    mc_cfg.dt      = 10.0;
+    mc_cfg.gps_sigma = cfg_.gps_sigma;
+    mc_cfg.q_pos     = cfg_.q_pos;
+    mc_cfg.q_vel     = cfg_.q_vel;
+    mc_cfg.filter    = monte_carlo::FilterKind::ekf;
+    mc_cfg.seed      = (seed >= 0) ? static_cast<unsigned>(seed) : 42u;
+    mc_cfg.x0        = x_true_initial_;
+
+    mc_stats_  = monte_carlo::run_monte_carlo(mc_cfg);
+    mc_n_runs_ = n_runs;
 }
 
 void Simulation::run_loop() {
@@ -158,9 +177,8 @@ void Simulation::step(double dt) {
             }
             case faults::FaultType::sensor_bias: {
                 // No observable effect yet: the filters are GPS-position-only
-                // and don't fuse IMU measurements (Phase 1 scope). The fault
-                // is still tracked/reported here so the UI can show it queued
-                // — see docs/checkpoint.md Phase 2 notes.
+                // and don't fuse IMU measurements. The fault is still
+                // tracked/reported here so the UI can show it queued.
                 const bool persists = (active_fault_.duration <= 0.0) ||
                     (t_now < active_fault_.onset_t + active_fault_.duration);
                 if (persists) reported_fault = faults::FaultType::sensor_bias;
@@ -262,6 +280,10 @@ void set_fault(const faults::FaultConfig& fault) { global_simulation().set_fault
 double get_sim_time() { return global_simulation().get_sim_time(); }
 bool is_running() { return global_simulation().is_running(); }
 
+void run_monte_carlo(size_t n_runs, int seed) { global_simulation().run_monte_carlo(n_runs, seed); }
+const monte_carlo::MCStats& get_mc_results() { return global_simulation().get_mc_results(); }
+size_t get_mc_n_runs() { return global_simulation().get_mc_n_runs(); }
+
 }  // namespace orbitforge
 
 #ifdef __EMSCRIPTEN__
@@ -269,14 +291,14 @@ bool is_running() { return global_simulation().is_running(); }
 
 #include <emscripten/emscripten.h>
 
-// CLAUDE.md §3's build flags export ccall/cwrap (EXPORTED_RUNTIME_METHODS),
-// and §20/wasm_types.ts already commit the JS side to the ccall calling
-// convention (OrbitForgeModule.ccall/cwrap, not embind value objects). These
+// The build exports ccall/cwrap (EXPORTED_RUNTIME_METHODS), and the JS side
+// (wasm_types.ts) already commits to the ccall calling convention
+// (OrbitForgeModule.ccall/cwrap, not embind value objects). These
 // extern "C" + EMSCRIPTEN_KEEPALIVE exports are what ccall('init_scenario',
-// ...) etc. resolve to — matching the existing TS scaffold rather than
-// embind's EMSCRIPTEN_BINDINGS macro. UNVERIFIED: no Emscripten toolchain
-// installed in this dev environment (see docs/checkpoint.md Phase 2 notes)
-// — smoke-test these exports in CI before relying on them.
+// ...) etc. resolve to — matching the TS bridge rather than embind's
+// EMSCRIPTEN_BINDINGS macro. UNVERIFIED: no Emscripten toolchain installed
+// in this dev environment — smoke-test these exports in CI before relying
+// on them.
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
@@ -331,6 +353,70 @@ double get_sim_time() { return orbitforge::get_sim_time(); }
 
 EMSCRIPTEN_KEEPALIVE
 int is_running() { return orbitforge::is_running() ? 1 : 0; }
+
+// run_monte_carlo blocks the calling worker thread until the campaign
+// completes — it does not return early and post a
+// separate completion message; ccall('run_monte_carlo', ...) is a
+// synchronous call on the JS side, same as the other void exports here.
+// MCStats arrays are exposed the same way the ring buffer is (raw pointer
+// + count, not a copy): the returned uintptr_t is a byte offset into WASM
+// linear memory, valid until the next run_monte_carlo() call reallocates
+// the underlying std::vector.
+EMSCRIPTEN_KEEPALIVE
+void run_monte_carlo(int n_runs, int seed) {
+    orbitforge::run_monte_carlo(n_runs > 0 ? static_cast<size_t>(n_runs) : 0, seed);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int get_mc_n_steps() { return static_cast<int>(orbitforge::get_mc_results().rms_pos.size()); }
+
+EMSCRIPTEN_KEEPALIVE
+int get_mc_n_runs() { return static_cast<int>(orbitforge::get_mc_n_runs()); }
+
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_rms_pos_ptr() {
+    return reinterpret_cast<uintptr_t>(orbitforge::get_mc_results().rms_pos.data());
+}
+
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_rms_vel_ptr() {
+    return reinterpret_cast<uintptr_t>(orbitforge::get_mc_results().rms_vel.data());
+}
+
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_nees_ptr() {
+    return reinterpret_cast<uintptr_t>(orbitforge::get_mc_results().nees.data());
+}
+
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_nis_ptr() {
+    return reinterpret_cast<uintptr_t>(orbitforge::get_mc_results().nis.data());
+}
+
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_final_pos_err_ptr() {
+    return reinterpret_cast<uintptr_t>(orbitforge::get_mc_results().final_pos_err.data());
+}
+
+EMSCRIPTEN_KEEPALIVE
+double get_mc_nees_lower() {
+    return orbitforge::monte_carlo::nees_bounds(orbitforge::get_mc_n_runs()).lower;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double get_mc_nees_upper() {
+    return orbitforge::monte_carlo::nees_bounds(orbitforge::get_mc_n_runs()).upper;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double get_mc_nis_lower() {
+    return orbitforge::monte_carlo::nis_bounds(orbitforge::get_mc_n_runs()).lower;
+}
+
+EMSCRIPTEN_KEEPALIVE
+double get_mc_nis_upper() {
+    return orbitforge::monte_carlo::nis_bounds(orbitforge::get_mc_n_runs()).upper;
+}
 
 }  // extern "C"
 #endif  // __EMSCRIPTEN__

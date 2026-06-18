@@ -35,8 +35,8 @@ static double bench_gravity_step(int iterations) {
 }
 
 // Full RK4 step (6-state, J2+drag) — 4 compute_acceleration calls per step.
-// This is the figure CLAUDE.md §13 targets at < 2 μs, distinct from the raw
-// compute_acceleration call timed above.
+// Target is < 2 μs, distinct from the raw compute_acceleration call timed
+// above.
 static double bench_rk4_step(int iterations) {
     PerturbationConfig cfg;
     cfg.enable_j2   = true;
@@ -66,9 +66,9 @@ static double bench_rk4_step(int iterations) {
 }
 
 // Single-threaded push+pop pairs, back to back — measures the raw cost of
-// the atomic operations themselves (CLAUDE.md §13's "counted over 10
-// seconds" methodology), not thread-scheduling overhead from a real
-// producer/consumer pair (that's a different, much noisier measurement).
+// the atomic operations themselves, not thread-scheduling overhead from a
+// real producer/consumer pair (that's a different, much noisier
+// measurement).
 static double bench_ring_buffer_throughput(int iterations) {
     orbitforge::memory::SPSCRingBuffer<int, 1024> rb;
     int sink = 0;
@@ -87,7 +87,10 @@ static double bench_ring_buffer_throughput(int iterations) {
     return iterations / seconds;  // frames/sec (push+pop pairs/sec)
 }
 
-namespace orbitforge::benchmarks { void run_filter_benchmarks(); }
+namespace orbitforge::benchmarks {
+void run_filter_benchmarks();
+void run_monte_carlo_benchmarks();
+}
 
 int main() {
     constexpr int N = 1'000'000;
@@ -102,5 +105,7 @@ int main() {
     const double ring_buffer_fps = bench_ring_buffer_throughput(10'000'000);
     std::printf("ring buffer push+pop pairs/sec (single-thread, %d iterations): %.2e /sec\n",
                 10'000'000, ring_buffer_fps);
+
+    orbitforge::benchmarks::run_monte_carlo_benchmarks();
     return 0;
 }

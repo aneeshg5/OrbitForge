@@ -21,7 +21,7 @@ struct FaultConfig {
     double    magnitude = 0.0;   // fault-specific parameter
 };
 
-// Thread-safe single-element mailbox (CLAUDE.md §9): the UI thread calls
+// Thread-safe single-element mailbox: the UI thread calls
 // set() to queue a fault config; the simulation worker calls try_take()
 // once per tick to pick it up. Only the most recently set() fault survives
 // if set() is called again before the worker reads it — this is a mailbox,

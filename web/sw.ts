@@ -1,9 +1,8 @@
 // Service worker: caches the WASM binary, glue JS, and static shell so the
-// app keeps working offline after the first load (CLAUDE.md §3's "works
-// offline after first load" claim). Cache-first for the WASM/JS/texture
-// assets (they're content-addressed by version below, not by URL hashing,
-// so a CACHE_NAME bump is what invalidates them) and network-first for
-// everything else.
+// app keeps working offline after the first load. Cache-first for the
+// WASM/JS/texture assets (they're content-addressed by version below, not
+// by URL hashing, so a CACHE_NAME bump is what invalidates them) and
+// network-first for everything else.
 
 const CACHE_NAME = 'orbitforge-v1'
 const PRECACHE_URLS = ['/', '/index.html', '/manifest.json', '/orbitforge.js', '/orbitforge.wasm']

@@ -43,7 +43,7 @@ static UnscentedKalmanFilter make_ukf() {
 }
 
 TEST(UKF, SigmaPointSymmetry) {
-    // The weighted mean of sigma points must equal x exactly (CLAUDE.md §14).
+    // The weighted mean of sigma points must equal x exactly.
     // For symmetric pairs chi_i = x ± gamma·S[:,i] and equal weights W_mi,
     // the positive and negative deviations cancel and the sum reduces to x.
     UnscentedKalmanFilter ukf = make_ukf();
@@ -91,7 +91,7 @@ TEST(SRUKF, CholeskyRemainsValid) {
 }
 
 TEST(UKF, PredictIncreasesCovariance) {
-    // Without measurements, process noise must drive trace(P) upward (CLAUDE.md §14).
+    // Without measurements, process noise must drive trace(P) upward.
     UnscentedKalmanFilter ukf = make_ukf();
     const double trace_before = ukf.P.trace();
     ukf.predict(10.0);

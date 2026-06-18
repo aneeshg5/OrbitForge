@@ -5,9 +5,9 @@
 // not run its own timing loop. The main thread reads StateFrames directly
 // out of the shared ring buffer at 60 fps via bridge/ring_reader.ts; this
 // worker's only job after init is to relay UI control messages into WASM
-// ccall()s. See CLAUDE.md §4.
+// ccall()s.
 
-import type { FaultConfig, OrbitForgeModule, ScenarioConfig } from './bridge/wasm_types.js'
+import type { FaultConfig, MCStats, OrbitForgeModule, ScenarioConfig } from './bridge/wasm_types.js'
 
 export interface InitMessage {
   type: 'init'
@@ -20,7 +20,11 @@ export interface SetFaultMessage {
   type: 'set_fault'
   payload: FaultConfig
 }
-export type WorkerRequest = InitMessage | ControlMessage | SetFaultMessage
+export interface RunMonteCarloMessage {
+  type: 'run_monte_carlo'
+  payload: { nRuns: number; seed: number }
+}
+export type WorkerRequest = InitMessage | ControlMessage | SetFaultMessage | RunMonteCarloMessage
 
 export interface RingBufferReadyMessage {
   type: 'ring_buffer_ready'
@@ -30,7 +34,11 @@ export interface RingBufferReadyMessage {
     ringBufferCapacity: number
   }
 }
-export type WorkerResponse = RingBufferReadyMessage
+export interface McResultsMessage {
+  type: 'mc_results'
+  payload: MCStats
+}
+export type WorkerResponse = RingBufferReadyMessage | McResultsMessage
 
 type WasmModuleFactory = () => Promise<OrbitForgeModule>
 
@@ -80,6 +88,46 @@ function initScenario(module: OrbitForgeModule, cfg: ScenarioConfig): void {
   self.postMessage(response)
 }
 
+// Reads `len` consecutive doubles starting at the byte offset `ptr` returned
+// by one of the get_mc_*_ptr() exports. Same byte-offset/8 = float64-index
+// convention as bridge/ring_reader.ts, since both read out of the same WASM
+// linear memory.
+function readF64Array(module: OrbitForgeModule, ptr: number, len: number): number[] {
+  const base = ptr / 8
+  const out = new Array<number>(len)
+  for (let i = 0; i < len; i++) out[i] = module.HEAPF64[base + i]!
+  return out
+}
+
+// run_monte_carlo blocks this worker (not the main thread) for the whole
+// campaign — see wasm_api.cpp's comment on the export. The result arrays
+// are copied out of WASM memory immediately after the call returns, before
+// any other ccall can run_monte_carlo() again and reallocate them
+// underneath a stale pointer.
+function runMonteCarlo(module: OrbitForgeModule, nRuns: number, seed: number): MCStats {
+  module.ccall('run_monte_carlo', null, ['number', 'number'], [nRuns, seed])
+
+  const nSteps = module.ccall('get_mc_n_steps', 'number', [], []) as number
+  const nRunsActual = module.ccall('get_mc_n_runs', 'number', [], []) as number
+  const rmsPosPtr = module.ccall('get_mc_rms_pos_ptr', 'number', [], []) as number
+  const rmsVelPtr = module.ccall('get_mc_rms_vel_ptr', 'number', [], []) as number
+  const neesPtr = module.ccall('get_mc_nees_ptr', 'number', [], []) as number
+  const nisPtr = module.ccall('get_mc_nis_ptr', 'number', [], []) as number
+  const finalPosErrPtr = module.ccall('get_mc_final_pos_err_ptr', 'number', [], []) as number
+
+  return {
+    rmsPosPerStep: readF64Array(module, rmsPosPtr, nSteps),
+    rmsVelPerStep: readF64Array(module, rmsVelPtr, nSteps),
+    neesPerStep: readF64Array(module, neesPtr, nSteps),
+    nisPerStep: readF64Array(module, nisPtr, nSteps),
+    finalPosErrPerRun: readF64Array(module, finalPosErrPtr, nRunsActual),
+    neesLower: module.ccall('get_mc_nees_lower', 'number', [], []) as number,
+    neesUpper: module.ccall('get_mc_nees_upper', 'number', [], []) as number,
+    nisLower: module.ccall('get_mc_nis_lower', 'number', [], []) as number,
+    nisUpper: module.ccall('get_mc_nis_upper', 'number', [], []) as number,
+  }
+}
+
 self.addEventListener('message', (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data
   void getWasmModule().then((module) => {
@@ -104,6 +152,12 @@ self.addEventListener('message', (e: MessageEvent<WorkerRequest>) => {
           [msg.payload.type, msg.payload.onsetT, msg.payload.duration, msg.payload.magnitude],
         )
         break
+      case 'run_monte_carlo': {
+        const stats = runMonteCarlo(module, msg.payload.nRuns, msg.payload.seed)
+        const response: McResultsMessage = { type: 'mc_results', payload: stats }
+        self.postMessage(response)
+        break
+      }
     }
   })
 })
