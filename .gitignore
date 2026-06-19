@@ -7,6 +7,10 @@ web/node_modules/
 # WASM build outputs (generated, not committed)
 web/public/orbitforge.wasm
 web/public/orbitforge.js
+web/public/orbitforge.worker.js
+
+# Playwright MCP test artifacts (screenshots, console logs)
+.playwright-mcp/
 
 # Emscripten cache
 .emscripten_cache/

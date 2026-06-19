@@ -6,7 +6,8 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENGINE_DIR="$ROOT_DIR/engine"
 OUT_DIR="$ROOT_DIR/web/public"
 
-source /opt/emsdk/emsdk_env.sh
+EMSDK_DIR="${EMSDK_DIR:-/opt/emsdk}"
+source "$EMSDK_DIR/emsdk_env.sh"
 
 mkdir -p "$OUT_DIR"
 
@@ -39,6 +40,9 @@ em++ \
     -sALLOW_MEMORY_GROWTH=1 \
     -sENVIRONMENT='web,worker' \
     -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","setValue","getValue"]' \
+    -sMODULARIZE=1 \
+    -sEXPORT_ES6=1 \
+    -sEXPORT_NAME=createOrbitForgeModule \
     -I"$ENGINE_DIR/include" \
     -I"$EIGEN_INCLUDE" \
     "$ENGINE_DIR/src/dynamics/eom.cpp" \
