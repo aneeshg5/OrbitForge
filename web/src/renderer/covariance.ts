@@ -118,6 +118,12 @@ export class CovarianceEllipsoidRenderer {
    * centerEci: filter position estimate [x,y,z] in ECI meters.
    * posVarianceDiag: [var_x, var_y, var_z] in m^2 (StateFrame's
    * *_cov_diag[0..2]).
+   *
+   * Same (x,y,z) -> (x,z,-y) remap as orbit.ts (see its addPoint() for
+   * why) applied to both the center and the per-axis scale — the variance
+   * is diagonal/axis-aligned in ECI, so remapping which scene axis each
+   * sigma lands on keeps the ellipsoid aligned with the remapped position
+   * data instead of pointing the wrong way relative to it.
    */
   render(
     view: Mat4,
@@ -131,9 +137,9 @@ export class CovarianceEllipsoidRenderer {
 
     const model = new Float32Array([
       sigma3[0]!, 0, 0, 0,
-      0, sigma3[1]!, 0, 0,
-      0, 0, sigma3[2]!, 0,
-      centerEci[0] * SCENE_SCALE, centerEci[1] * SCENE_SCALE, centerEci[2] * SCENE_SCALE, 1,
+      0, sigma3[2]!, 0, 0,
+      0, 0, sigma3[1]!, 0,
+      centerEci[0] * SCENE_SCALE, centerEci[2] * SCENE_SCALE, -centerEci[1] * SCENE_SCALE, 1,
     ])
 
     gl.useProgram(this.program)

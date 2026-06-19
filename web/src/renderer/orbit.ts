@@ -123,12 +123,22 @@ export class OrbitPathRenderer {
     this.uColor = gl.getUniformLocation(this.program, 'u_color')
   }
 
-  /** position is ECI meters [x, y, z]. */
+  /**
+   * position is ECI meters [x, y, z]. Remapped (x,y,z) -> (x,z,-y) before
+   * scaling into scene units — a proper -90 deg rotation about X, not a
+   * raw component swap, so handedness is preserved. earth.ts's sphere and
+   * the camera (OrbitCamera orbits around world-Y) both already treat
+   * scene-Y as the pole/vertical axis; this rotation puts ECI's true spin
+   * axis (ECI-Z, the actual physics pole — see CLAUDE.md §6) there too,
+   * so satellite inclination lines up with where Earth's mesh and the
+   * dashed axis line (axis.ts) actually are, instead of orbiting at a
+   * skew angle to them.
+   */
   addPoint(kind: PathKind, position: readonly [number, number, number]): void {
     this.paths[kind].addPoint(
       position[0] * SCENE_SCALE,
-      position[1] * SCENE_SCALE,
       position[2] * SCENE_SCALE,
+      -position[1] * SCENE_SCALE,
     )
   }
 

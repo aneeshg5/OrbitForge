@@ -24,6 +24,7 @@
       --accent-orange: #f7a93e; /* UKF */
       --accent-primary: #3b82f6;
       --accent-danger: #ef5a6f;
+      --accent-green: #3ddc84;
 
       --font-ui: 'Inter', system-ui, -apple-system, sans-serif;
       --font-mono: 'Fira Code', 'SF Mono', monospace;
@@ -61,15 +62,29 @@
       align-items: center;
       gap: 8px;
     }
-    #brand::before {
-      content: '';
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--accent-blue);
-      box-shadow: 0 0 8px var(--accent-blue);
+    #brand-logo {
+      width: 22px;
+      height: 22px;
     }
-    #status { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono); }
+    .run-controls { display: flex; gap: 8px; }
+    .run-toggle-btn, .reset-btn { font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 34px; }
+    .run-toggle-btn .btn-icon, .reset-btn .btn-icon { font-size: 16px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+    .reset-btn .btn-icon { font-size: 20px; width: 20px; }
+    .run-toggle-btn.state-idle, .run-toggle-btn.state-paused {
+      color: var(--accent-green);
+      background: rgba(61, 220, 132, 0.1);
+    }
+    .run-toggle-btn.state-idle:hover, .run-toggle-btn.state-paused:hover { background: rgba(61, 220, 132, 0.2); }
+    .run-toggle-btn.state-running {
+      color: var(--accent-orange);
+      background: rgba(247, 169, 62, 0.1);
+    }
+    .run-toggle-btn.state-running:hover { background: rgba(247, 169, 62, 0.2); }
+    .reset-btn {
+      color: var(--accent-danger);
+      background: rgba(239, 90, 111, 0.1);
+    }
+    .reset-btn:hover { background: rgba(239, 90, 111, 0.2); }
 
     #layout { display: flex; flex: 1 1 auto; min-height: 0; }
     #scene-canvas { flex: 1 1 0%; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
@@ -252,8 +267,8 @@
 <body>
   <div id="app">
     <div id="topbar">
-      <div id="brand">OrbitForge</div>
-      <div id="status">loading...</div>
+      <div id="brand"><img id="brand-logo" src="/logo.png" alt="OrbitForge logo" />OrbitForge</div>
+      <div id="run-controls-container"></div>
     </div>
     <div id="layout">
       <canvas id="scene-canvas"></canvas>

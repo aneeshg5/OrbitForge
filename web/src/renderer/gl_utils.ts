@@ -29,6 +29,30 @@ export function mat4Multiply(a: Mat4, b: Mat4): Mat4 {
   return out
 }
 
+/** Rotation about the Z axis (the camera's default depth/forward axis at azimuth=elevation=0). */
+export function mat4RotateZ(angleRad: number): Mat4 {
+  const c = Math.cos(angleRad)
+  const s = Math.sin(angleRad)
+  const out = mat4Identity()
+  out[0] = c
+  out[1] = s
+  out[4] = -s
+  out[5] = c
+  return out
+}
+
+/** Rotation about the Y axis (Earth's pole, per earth.ts's sphere parameterization). */
+export function mat4RotateY(angleRad: number): Mat4 {
+  const c = Math.cos(angleRad)
+  const s = Math.sin(angleRad)
+  const out = mat4Identity()
+  out[0] = c
+  out[2] = -s
+  out[8] = s
+  out[10] = c
+  return out
+}
+
 export function mat4Perspective(fovYRad: number, aspect: number, near: number, far: number): Mat4 {
   const f = 1.0 / Math.tan(fovYRad / 2)
   const out = new Float32Array(16)

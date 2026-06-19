@@ -6,19 +6,50 @@ import { RingReader } from './bridge/ring_reader.js'
 import type { StateFrame } from './bridge/wasm_types.js'
 import type { WorkerRequest, WorkerResponse } from './worker.js'
 import { EarthRenderer } from './renderer/earth.js'
+import { RotationAxisRenderer } from './renderer/axis.js'
 import { OrbitPathRenderer } from './renderer/orbit.js'
 import { CovarianceEllipsoidRenderer } from './renderer/covariance.js'
 import { Starfield } from './renderer/starfield.js'
 import { PanelManager } from './renderer/panels.js'
-import { mat4Identity, mat4LookAt, mat4Perspective, mat4StripTranslation, type Mat4, FILTER_COLOR_RGB } from './renderer/gl_utils.js'
+import { mat4LookAt, mat4Multiply, mat4Perspective, mat4RotateY, mat4RotateZ, mat4StripTranslation, type Mat4, FILTER_COLOR_RGB } from './renderer/gl_utils.js'
 import { ScenarioEditor } from './ui/scenario_editor.js'
 import { FaultPanel } from './ui/fault_panel.js'
 import { MCResultsPanel } from './ui/mc_results.js'
+import { RunControls } from './ui/run_controls.js'
+
+// Earth's axial tilt (obliquity) relative to the ecliptic — not modeled
+// anywhere in the physics (everything here is ECI, where the spin axis
+// defines the Z axis by construction), but baked into the view matrix as
+// a fixed world rotation so the globe reads as the familiar tilted Earth
+// rather than upright. Applied before the camera transform so it rotates
+// Earth, orbit paths, and covariance ellipsoids together consistently.
+//
+// Earth's mesh (earth.ts buildSphere) and the camera's own orbit
+// convention (OrbitCamera orbits around world-Y, i.e. Y is "vertical")
+// both already treat Y as the pole/up axis — that pairing is what makes
+// the default camera angle read as a normal globe view rather than
+// staring down the pole. Rather than fight that by moving Earth's pole to
+// match ECI's Z-is-north convention, the ECI->scene remap for satellite
+// data lives in orbit.ts/covariance.ts instead (see SCENE_SCALE usage
+// there) — so Y stays the on-screen pole and this tilt stays a simple
+// roll about the camera's forward (Z) axis, exactly as it always was.
+const EARTH_TILT = mat4RotateZ((23.4 * Math.PI) / 180)
+
+// Stylized (not physically accurate) spin rate: one full rotation every 20
+// wall-clock seconds, always running regardless of sim state. The real
+// sidereal rate (~0.0042 deg/s, see gps.hpp's gast_rad()) would be
+// visually imperceptible over a normal session — a LEO orbit only takes
+// ~90 minutes while a real Earth rotation takes ~24 hours, so tying the
+// visual to the real rate would make the globe look static. This rate is
+// purely cosmetic; the GPS sensor model's ECI->ECEF transform still uses
+// the real GAST formula internally and is unaffected by this constant.
+const EARTH_SPIN_RAD_PER_SEC = (2 * Math.PI) / 20
 
 interface Scene {
   gl: WebGL2RenderingContext
   starfield: Starfield
   earth: EarthRenderer
+  axis: RotationAxisRenderer
   orbits: OrbitPathRenderer
   covariances: CovarianceEllipsoidRenderer
   panels: PanelManager
@@ -143,6 +174,7 @@ function setupScene(): Scene {
     canvas,
     starfield: new Starfield(gl),
     earth: new EarthRenderer(gl),
+    axis: new RotationAxisRenderer(gl),
     orbits: new OrbitPathRenderer(gl),
     covariances: new CovarianceEllipsoidRenderer(gl),
     panels: new PanelManager(posErrCanvas, velErrCanvas, covTraceCanvas, nisCanvas),
@@ -178,8 +210,14 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
 
   const aspect = canvas.width / Math.max(1, canvas.height)
   const proj = mat4Perspective((45 * Math.PI) / 180, aspect, 0.05, 100)
-  const view = camera.viewMatrix()
-  const model = mat4Identity()
+  const view = mat4Multiply(camera.viewMatrix(), EARTH_TILT)
+
+  // Driven by wall-clock time, not sim_time: this is a purely cosmetic
+  // spin (see EARTH_SPIN_RAD_PER_SEC above), so it keeps turning whether
+  // the sim is idle, running, or paused, the way a desk globe would —
+  // tying it to sim_time would freeze it whenever the sim isn't running.
+  const spinAngle = (performance.now() / 1000) * EARTH_SPIN_RAD_PER_SEC % (2 * Math.PI)
+  const earthModel = mat4RotateY(spinAngle)
 
   // Rendered first so Earth/orbits naturally occlude it via the depth
   // test — see starfield.ts for why a translation-stripped view matrix
@@ -187,7 +225,8 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   // when the camera zooms.
   scene.starfield.render(mat4StripTranslation(view), proj)
 
-  scene.earth.render(model, view, proj)
+  scene.earth.render(earthModel, view, proj)
+  scene.axis.render(view, proj)
   scene.orbits.render(view, proj)
 
   if (latestFrame) {
@@ -233,9 +272,6 @@ function registerServiceWorker(): void {
 }
 
 async function main(): Promise<void> {
-  const status = document.getElementById('status')!
-  status.textContent = 'loading...'
-
   registerServiceWorker()
 
   const scene = setupScene()
@@ -254,7 +290,6 @@ async function main(): Promise<void> {
     if (e.data.type === 'ring_buffer_ready') {
       const { sharedArrayBuffer, ringBufferPtr, ringBufferCapacity } = e.data.payload
       ringReader = new RingReader(sharedArrayBuffer, ringBufferPtr, ringBufferCapacity)
-      status.textContent = 'running'
     } else if (e.data.type === 'mc_results') {
       mcResults.handleResults(e.data.payload)
     }
@@ -262,10 +297,11 @@ async function main(): Promise<void> {
 
   const scenarioContainer = document.getElementById('scenario-editor-container')!
   const faultContainer = document.getElementById('fault-panel-container')!
-  new ScenarioEditor(scenarioContainer, { postToWorker })
+  const scenarioEditor = new ScenarioEditor(scenarioContainer)
   new FaultPanel(faultContainer, { postToWorker })
 
-  status.textContent = 'pick a satellite and press Run'
+  const runControlsContainer = document.getElementById('run-controls-container')!
+  new RunControls(runControlsContainer, { postToWorker, getConfig: () => scenarioEditor.getConfig() })
 }
 
 main().catch((err: unknown) => console.error('OrbitForge init failed:', err))

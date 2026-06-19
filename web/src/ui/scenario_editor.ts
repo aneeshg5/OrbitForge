@@ -1,17 +1,11 @@
-// Scenario editor: satellite picker (CelesTrak presets or
-// pasted TLE), GPS sigma / sim speed sliders, perturbation toggles, and
-// Run/Pause/Reset controls. Posts WorkerRequest messages through the
-// caller-supplied `postToWorker` callback — never calls ccall directly;
-// all WASM calls go through bridge/wasm_types.ts.
+// Scenario editor: satellite picker (CelesTrak presets or pasted TLE),
+// GPS sigma / sim speed sliders, and perturbation toggles. Exposes
+// getConfig() so the topbar RunControls can read the current scenario
+// without this editor needing to know about run/pause/reset.
 
 import { PRESETS, fetchTleByNorad } from '../data/tle_feed.js'
 import type { OrbitalElements } from '../data/tle_parser.js'
 import type { ScenarioConfig } from '../bridge/wasm_types.js'
-import type { WorkerRequest } from '../worker.js'
-
-export interface ScenarioEditorOptions {
-  postToWorker: (msg: WorkerRequest) => void
-}
 
 const DEFAULTS = {
   gpsSigma: 10,
@@ -31,7 +25,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
 
 export class ScenarioEditor {
   private readonly root: HTMLElement
-  private readonly postToWorker: (msg: WorkerRequest) => void
   private currentTle: { line1: string; line2: string } | undefined
 
   private readonly satelliteSelect: HTMLSelectElement
@@ -43,11 +36,9 @@ export class ScenarioEditor {
   private readonly j2Checkbox: HTMLInputElement
   private readonly dragCheckbox: HTMLInputElement
   private readonly srpCheckbox: HTMLInputElement
-  private readonly runButton: HTMLButtonElement
   private readonly statusLine: HTMLDivElement
 
-  constructor(container: HTMLElement, options: ScenarioEditorOptions) {
-    this.postToWorker = options.postToWorker
+  constructor(container: HTMLElement) {
     this.root = el('div', 'scenario-editor')
 
     const heading = el('h3')
@@ -114,26 +105,14 @@ export class ScenarioEditor {
     const perturbRow = el('div', 'row')
     perturbRow.append(j2Field.label, dragField.label, srpField.label)
 
-    const buttonRow = el('div', 'row')
-    this.runButton = el('button')
-    this.runButton.textContent = '▶ Run'
-    const pauseButton = el('button')
-    pauseButton.textContent = '⏸ Pause'
-    const resetButton = el('button')
-    resetButton.textContent = '⟳ Reset'
-    buttonRow.append(this.runButton, pauseButton, resetButton)
-
     this.statusLine = el('div', 'status-line')
 
-    this.root.append(satelliteRow, this.tleTextarea, gpsRow, speedRow, perturbRow, buttonRow, this.statusLine)
+    this.root.append(satelliteRow, this.tleTextarea, gpsRow, speedRow, perturbRow, this.statusLine)
     container.appendChild(this.root)
 
     this.satelliteSelect.addEventListener('change', () => {
       void this.onSatelliteChange()
     })
-    this.runButton.addEventListener('click', () => this.onRun())
-    pauseButton.addEventListener('click', () => this.postToWorker({ type: 'pause' }))
-    resetButton.addEventListener('click', () => this.postToWorker({ type: 'reset' }))
 
     // Default to the first preset (ISS) so Run works without extra clicks.
     if (PRESETS.length > 0) {
@@ -181,14 +160,16 @@ export class ScenarioEditor {
     return { line1, line2 }
   }
 
-  private onRun(): void {
+  // Returns the scenario config to launch with, or undefined (and reports
+  // why via the status line) if no TLE is available yet.
+  getConfig(): ScenarioConfig | undefined {
     const tle = this.satelliteSelect.value === '__paste__' ? this.parsePastedTle() : this.currentTle
     if (!tle) {
       this.statusLine.textContent = 'No valid TLE selected or pasted.'
-      return
+      return undefined
     }
 
-    const cfg: ScenarioConfig = {
+    return {
       tleLine1: tle.line1,
       tleLine2: tle.line2,
       gpsSigma: Number(this.gpsSigmaInput.value),
@@ -203,9 +184,5 @@ export class ScenarioEditor {
       simSpeed: Number(this.simSpeedInput.value),
       seed: -1,
     }
-
-    this.postToWorker({ type: 'init', payload: cfg })
-    this.postToWorker({ type: 'start' })
-    this.statusLine.textContent = 'Running.'
   }
 }
