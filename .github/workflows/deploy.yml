@@ -32,6 +32,21 @@ jobs:
       - name: Build WASM
         run: ./scripts/build_wasm.sh
 
+      # Lets internal testing pull a working build locally (via
+      # `gh run download`) without needing Emscripten installed and
+      # without it ever touching the public Cloudflare deployment below —
+      # useful while the deploy step's CLOUDFLARE_API_TOKEN/ACCOUNT_ID
+      # secrets aren't set yet, or whenever testing-before-deploy is wanted.
+      - name: Upload WASM artifact for local testing
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbitforge-wasm
+          path: |
+            web/public/orbitforge.js
+            web/public/orbitforge.wasm
+            web/public/orbitforge.worker.js
+          retention-days: 14
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
