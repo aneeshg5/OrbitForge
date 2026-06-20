@@ -4,8 +4,8 @@
 // without this editor needing to know about run/pause/reset.
 
 import { PRESETS, fetchTleByNorad } from '../data/tle_feed.js'
-import type { OrbitalElements } from '../data/tle_parser.js'
 import type { ScenarioConfig } from '../bridge/wasm_types.js'
+import { showToast } from './toast.js'
 
 export interface ScenarioEditorOptions {
   // Fired whenever whether getConfig() would currently succeed changes —
@@ -41,6 +41,15 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
 export class ScenarioEditor {
   private readonly root: HTMLElement
   private currentTle: { line1: string; line2: string } | undefined
+  // Bumped on every onSatelliteChange() call; lets an in-flight fetch
+  // detect it's been superseded by a newer selection and bail out instead
+  // of overwriting currentTle/statusLine/availability with stale results.
+  // Without this, switching satellites while a slow CelesTrak request is
+  // still in flight (the auto-fetch on page load is itself one such
+  // request) could have an old fetch resolve after a newer one and leave
+  // the Run button disabled (or showing the wrong "Loaded X") even though
+  // the satellite you're actually looking at loaded fine.
+  private requestSeq = 0
 
   private readonly satelliteSelect: HTMLSelectElement
   private readonly tleTextarea: HTMLTextAreaElement
@@ -81,6 +90,10 @@ export class ScenarioEditor {
     this.tleTextarea = el('textarea')
     this.tleTextarea.placeholder = 'Paste a 2-line TLE here if not selecting a preset above'
     this.tleTextarea.rows = 2
+    // Only relevant when "(paste TLE below)" is selected — hidden the rest
+    // of the time so the panel isn't cluttered with an inert text box
+    // while a preset satellite is active.
+    this.tleTextarea.style.display = 'none'
 
     const gpsRow = el('div', 'row')
     const gpsLabel = el('label')
@@ -163,9 +176,13 @@ export class ScenarioEditor {
   }
 
   private async onSatelliteChange(): Promise<void> {
+    const seq = ++this.requestSeq
     const value = this.satelliteSelect.value
+    this.tleTextarea.style.display = value === '__paste__' ? '' : 'none'
+
     if (value === '__paste__') {
       this.currentTle = undefined
+      this.statusLine.textContent = ''
       this.notifyAvailability()
       return
     }
@@ -173,11 +190,21 @@ export class ScenarioEditor {
     this.currentTle = undefined
     this.notifyAvailability()
     try {
-      const elements: OrbitalElements = await fetchTleByNorad(noradId)
+      const result = await fetchTleByNorad(noradId)
+      if (seq !== this.requestSeq) return // superseded by a newer selection — discard this result
+      const elements = result.elements
       this.currentTle = { line1: elements.tleLine1, line2: elements.tleLine2 }
-      this.statusLine.textContent = `Loaded ${elements.name || `NORAD ${noradId}`}`
+      const label = elements.name || `NORAD ${noradId}`
+      if (result.fromCache) {
+        this.statusLine.textContent = `Loaded ${label} (cached, offline)`
+        showToast(`CelesTrak unreachable — using cached TLE for ${label} (cached ${result.cachedAt}, may be stale)`, 'info')
+      } else {
+        this.statusLine.textContent = `Loaded ${label}`
+      }
     } catch (err) {
-      this.statusLine.textContent = `Failed to fetch TLE: ${String(err)}`
+      if (seq !== this.requestSeq) return // superseded — don't disable Run for a selection the user already changed away from
+      this.statusLine.textContent = ''
+      showToast(`Failed to fetch TLE for NORAD ${noradId}: ${String(err)}`, 'error')
       this.currentTle = undefined
     }
     this.notifyAvailability()
@@ -196,11 +223,11 @@ export class ScenarioEditor {
   }
 
   // Returns the scenario config to launch with, or undefined (and reports
-  // why via the status line) if no TLE is available yet.
+  // why via a toast) if no TLE is available yet.
   getConfig(): ScenarioConfig | undefined {
     const tle = this.satelliteSelect.value === '__paste__' ? this.parsePastedTle() : this.currentTle
     if (!tle) {
-      this.statusLine.textContent = 'No valid TLE selected or pasted.'
+      showToast('No valid TLE selected or pasted.', 'error')
       return undefined
     }
 

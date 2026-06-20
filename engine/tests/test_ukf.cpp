@@ -139,3 +139,22 @@ TEST(UKF, ResetAttitudeErrorFoldsIntoQRefAndZeroes) {
     EXPECT_GT(ukf.q_ref.angularDistance(q_ref_before), 1e-4);
     EXPECT_NEAR(ukf.q_ref.norm(), 1.0, 1e-12);
 }
+
+TEST(UKF, ResetComposesCorrectionInBodyFrameRightMultiply) {
+    // Same convention-independent geometric check as
+    // EKF.ResetComposesCorrectionInBodyFrameRightMultiply — see that
+    // test's comment for why this is checked geometrically rather than by
+    // hand-translating the Markley/Shuster-convention literature.
+    UnscentedKalmanFilter ukf = make_ukf();
+    const math::Quat q_ref_before(Eigen::AngleAxisd(0.7, Eigen::Vector3d(0.3, -0.5, 0.8).normalized()));
+    ukf.q_ref = q_ref_before;
+    const Eigen::Vector3d delta_theta(0.02, -0.01, 0.015);
+    ukf.x.head<3>() = delta_theta;
+
+    ukf.reset_attitude_error();
+
+    const Eigen::Matrix3d R_correction = Eigen::AngleAxisd(delta_theta.norm(), delta_theta.normalized()).toRotationMatrix();
+    const Eigen::Matrix3d R_expected = q_ref_before.toRotationMatrix() * R_correction;
+
+    EXPECT_TRUE(ukf.q_ref.toRotationMatrix().isApprox(R_expected, 1e-9));
+}

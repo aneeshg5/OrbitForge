@@ -125,3 +125,41 @@ TEST(EKF, ResetAttitudeErrorFoldsIntoQRefAndZeroes) {
     EXPECT_GT(ekf.q_ref.angularDistance(q_ref_before), 1e-4);
     EXPECT_NEAR(ekf.q_ref.norm(), 1.0, 1e-12);
 }
+
+TEST(EKF, ResetComposesCorrectionInBodyFrameRightMultiply) {
+    // Geometric, convention-independent check of the reset step's
+    // composition DIRECTION: q_ref <- q_ref * delta_q, not delta_q * q_ref.
+    // The spacecraft-attitude literature (Markley/Shuster) uses a
+    // different quaternion multiplication convention than Eigen's
+    // Hamilton convention used here (their product negates the
+    // cross-product term relative to Hamilton's) — translating their
+    // composition-order equations by hand is genuinely treacherous (see
+    // math.md §7.3's note); this test instead checks the unambiguous
+    // PHYSICAL requirement directly, independent of any paper's notation.
+    //
+    // delta_theta is a correction expressed in the CURRENT BODY FRAME —
+    // it's exactly what H_gyro/H_mag map state perturbations to, in body
+    // coordinates. Composing "apply the existing attitude, then apply a
+    // further small rotation described in the frame that attitude
+    // produces" is the standard intrinsic-rotation rule R_total =
+    // R_existing * R_correction (correction on the right) — this only
+    // relies on Eigen's own documented property that its rotation
+    // matrices compose in the same order as its quaternion product, not
+    // on this codebase's own composition code.
+    ExtendedKalmanFilter ekf = make_ekf();
+    const math::Quat q_ref_before(Eigen::AngleAxisd(0.7, Eigen::Vector3d(0.3, -0.5, 0.8).normalized()));
+    ekf.q_ref = q_ref_before;
+    const Eigen::Vector3d delta_theta(0.02, -0.01, 0.015);
+    ekf.x.head<3>() = delta_theta;
+
+    ekf.reset_attitude_error();
+
+    // Independently built expected rotation matrix — via Eigen's own
+    // AngleAxis and matrix multiplication directly, not via quat_exp or
+    // any of this codebase's composition helpers — with the correction
+    // applied on the right.
+    const Eigen::Matrix3d R_correction = Eigen::AngleAxisd(delta_theta.norm(), delta_theta.normalized()).toRotationMatrix();
+    const Eigen::Matrix3d R_expected = q_ref_before.toRotationMatrix() * R_correction;
+
+    EXPECT_TRUE(ekf.q_ref.toRotationMatrix().isApprox(R_expected, 1e-9));
+}
