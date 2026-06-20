@@ -75,10 +75,16 @@ function initScenario(module: OrbitForgeModule, cfg: ScenarioConfig): void {
     'init_scenario',
     null,
     ['string', 'string', 'number', 'number', 'number', 'number', 'number',
-     'number', 'number', 'number', 'number', 'number', 'number'],
+     'number', 'number', 'number', 'number', 'number', 'number',
+     // Phase 5: 6DOF (CLAUDE.md §21) — appended after the Phase 1-4 params,
+     // matching wasm_api.cpp's extern "C" init_scenario signature exactly.
+     'number', 'number', 'number', 'number', 'number', 'number', 'number',
+     'number', 'number', 'number'],
     [cfg.tleLine1, cfg.tleLine2, cfg.gpsSigma, cfg.imuSigma,
      cfg.enableJ2 ? 1 : 0, cfg.enableDrag ? 1 : 0, cfg.enableSrp ? 1 : 0,
-     cfg.dragCoeff, cfg.areaToMass, cfg.qPos, cfg.qVel, cfg.simSpeed, cfg.seed],
+     cfg.dragCoeff, cfg.areaToMass, cfg.qPos, cfg.qVel, cfg.simSpeed, cfg.seed,
+     cfg.inertiaX, cfg.inertiaY, cfg.inertiaZ, cfg.gyroSigma, cfg.magSigma,
+     cfg.qAtt, cfg.qOmega, cfg.initOmegaX, cfg.initOmegaY, cfg.initOmegaZ],
   )
 
   const ringBufferPtr = module.ccall('get_ring_buffer_ptr', 'number', [], []) as number

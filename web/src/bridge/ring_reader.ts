@@ -1,30 +1,38 @@
 import type { StateFrame } from './wasm_types.js'
 
 // sizeof(StateFrame) in bytes — must match C++ struct (engine/include/wasm_api.hpp).
-// 46 doubles (1 simTime + 3+3 true + (3+3+6+1)×3 filters = 46) × 8 bytes = 368,
-// + 1 byte activeFault padded up to the next 8-byte boundary = 376 bytes.
-// Verified against the compiler's sizeof(StateFrame).
-const FRAME_BYTES = 376
+// Phase 5 grew this substantially (true_quat/omega + both EKF/UKF gaining
+// quat+omega+6 more cov_diag entries each). 640 bytes, measured via
+// offsetof() against the actual compiled struct — not hand-counted, per
+// CLAUDE.md §22 rule 6 ("don't guess at... terms").
+const FRAME_BYTES = 640
 
 // Offsets (in doubles, i.e. byte_offset / 8) for each field in StateFrame.
-// Must exactly mirror the C++ struct layout.
+// Must exactly mirror the C++ struct layout — these are the offsetof()
+// values measured against the compiled struct, not hand-counted.
 const OFF = {
-  simTime:    0,
-  truePos:    1,
-  trueVel:    4,
-  kfPos:      7,
-  kfVel:      10,
-  kfCovDiag:  13,
-  kfNis:      19,
-  ekfPos:     20,
-  ekfVel:     23,
-  ekfCovDiag: 26,
-  ekfNis:     32,
-  ukfPos:     33,
-  ukfVel:     36,
-  ukfCovDiag: 39,
-  ukfNis:     45,
-  activeFault: 46, // uint8, read separately
+  simTime:     0,
+  truePos:     1,
+  trueVel:     4,
+  trueQuat:    7,
+  trueOmega:   11,
+  kfPos:       14,
+  kfVel:       17,
+  kfCovDiag:   20,
+  kfNis:       26,
+  ekfPos:      27,
+  ekfVel:      30,
+  ekfQuat:     33,
+  ekfOmega:    37,
+  ekfCovDiag:  40,
+  ekfNis:      52,
+  ukfPos:      53,
+  ukfVel:      56,
+  ukfQuat:     59,
+  ukfOmega:    63,
+  ukfCovDiag:  66,
+  ukfNis:      78,
+  activeFault: 79, // uint8, read separately (byte offset = 79*8 = 632)
 } as const
 
 export class RingReader {
@@ -53,6 +61,13 @@ export class RingReader {
     this.u8  = new Uint8Array(sab, framesOffset)
   }
 
+  // Reads n consecutive doubles starting at float64 index `base + off`.
+  private readN(base: number, off: number, n: number): number[] {
+    const out = new Array<number>(n)
+    for (let i = 0; i < n; i++) out[i] = this.f64[base + off + i]!
+    return out
+  }
+
   /** Returns all pending frames (may be empty). */
   drain(): StateFrame[] {
     const writePos = Atomics.load(this.writePosView, 0)
@@ -63,22 +78,32 @@ export class RingReader {
       const base = (slot * FRAME_BYTES) / 8  // float64 index
 
       const frame: StateFrame = {
-        simTime:    this.f64[base + OFF.simTime],
-        truePos:    [this.f64[base + OFF.truePos], this.f64[base + OFF.truePos + 1], this.f64[base + OFF.truePos + 2]],
-        trueVel:    [this.f64[base + OFF.trueVel], this.f64[base + OFF.trueVel + 1], this.f64[base + OFF.trueVel + 2]],
-        kfPos:      [this.f64[base + OFF.kfPos],   this.f64[base + OFF.kfPos + 1],   this.f64[base + OFF.kfPos + 2]],
-        kfVel:      [this.f64[base + OFF.kfVel],   this.f64[base + OFF.kfVel + 1],   this.f64[base + OFF.kfVel + 2]],
-        kfCovDiag:  [this.f64[base+OFF.kfCovDiag], this.f64[base+OFF.kfCovDiag+1], this.f64[base+OFF.kfCovDiag+2], this.f64[base+OFF.kfCovDiag+3], this.f64[base+OFF.kfCovDiag+4], this.f64[base+OFF.kfCovDiag+5]],
-        kfNis:      this.f64[base + OFF.kfNis],
-        ekfPos:     [this.f64[base + OFF.ekfPos],  this.f64[base + OFF.ekfPos + 1],  this.f64[base + OFF.ekfPos + 2]],
-        ekfVel:     [this.f64[base + OFF.ekfVel],  this.f64[base + OFF.ekfVel + 1],  this.f64[base + OFF.ekfVel + 2]],
-        ekfCovDiag: [this.f64[base+OFF.ekfCovDiag],this.f64[base+OFF.ekfCovDiag+1],this.f64[base+OFF.ekfCovDiag+2],this.f64[base+OFF.ekfCovDiag+3],this.f64[base+OFF.ekfCovDiag+4],this.f64[base+OFF.ekfCovDiag+5]],
-        ekfNis:     this.f64[base + OFF.ekfNis],
-        ukfPos:     [this.f64[base + OFF.ukfPos],  this.f64[base + OFF.ukfPos + 1],  this.f64[base + OFF.ukfPos + 2]],
-        ukfVel:     [this.f64[base + OFF.ukfVel],  this.f64[base + OFF.ukfVel + 1],  this.f64[base + OFF.ukfVel + 2]],
-        ukfCovDiag: [this.f64[base+OFF.ukfCovDiag],this.f64[base+OFF.ukfCovDiag+1],this.f64[base+OFF.ukfCovDiag+2],this.f64[base+OFF.ukfCovDiag+3],this.f64[base+OFF.ukfCovDiag+4],this.f64[base+OFF.ukfCovDiag+5]],
-        ukfNis:     this.f64[base + OFF.ukfNis],
-        activeFault: this.u8[slot * FRAME_BYTES + OFF.activeFault * 8],
+        simTime:    this.f64[base + OFF.simTime]!,
+        truePos:    this.readN(base, OFF.truePos, 3) as [number, number, number],
+        trueVel:    this.readN(base, OFF.trueVel, 3) as [number, number, number],
+        trueQuat:   this.readN(base, OFF.trueQuat, 4) as [number, number, number, number],
+        trueOmega:  this.readN(base, OFF.trueOmega, 3) as [number, number, number],
+
+        kfPos:      this.readN(base, OFF.kfPos, 3) as [number, number, number],
+        kfVel:      this.readN(base, OFF.kfVel, 3) as [number, number, number],
+        kfCovDiag:  this.readN(base, OFF.kfCovDiag, 6) as [number, number, number, number, number, number],
+        kfNis:      this.f64[base + OFF.kfNis]!,
+
+        ekfPos:     this.readN(base, OFF.ekfPos, 3) as [number, number, number],
+        ekfVel:     this.readN(base, OFF.ekfVel, 3) as [number, number, number],
+        ekfQuat:    this.readN(base, OFF.ekfQuat, 4) as [number, number, number, number],
+        ekfOmega:   this.readN(base, OFF.ekfOmega, 3) as [number, number, number],
+        ekfCovDiag: this.readN(base, OFF.ekfCovDiag, 12) as StateFrame['ekfCovDiag'],
+        ekfNis:     this.f64[base + OFF.ekfNis]!,
+
+        ukfPos:     this.readN(base, OFF.ukfPos, 3) as [number, number, number],
+        ukfVel:     this.readN(base, OFF.ukfVel, 3) as [number, number, number],
+        ukfQuat:    this.readN(base, OFF.ukfQuat, 4) as [number, number, number, number],
+        ukfOmega:   this.readN(base, OFF.ukfOmega, 3) as [number, number, number],
+        ukfCovDiag: this.readN(base, OFF.ukfCovDiag, 12) as StateFrame['ukfCovDiag'],
+        ukfNis:     this.f64[base + OFF.ukfNis]!,
+
+        activeFault: this.u8[slot * FRAME_BYTES + OFF.activeFault * 8]!,
       }
 
       frames.push(frame)

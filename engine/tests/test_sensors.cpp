@@ -4,6 +4,7 @@
 
 #include "sensors/gps.hpp"
 #include "sensors/imu.hpp"
+#include "sensors/gyro.hpp"
 #include "sensors/magnetometer.hpp"
 #include "constants.hpp"
 
@@ -130,4 +131,63 @@ TEST(Magnetometer, NoiseIsAdditive) {
 
     // Mean bias per axis < 3-sigma/sqrt(N) ≈ 6.7 nT
     EXPECT_LT((sum / N - B_true).cwiseAbs().maxCoeff(), 4.0 * sigma / std::sqrt(N));
+}
+
+TEST(Magnetometer, MeasureBodyRotatesEciField) {
+    // A 90-degree body roll about x should swap the y/z components of the
+    // ECI field (up to noise) — a simple, hand-checkable rotation case.
+    const double r0 = k_re + 408e3;
+    const Eigen::Vector3d r_eci(r0, 0.0, 0.0);
+    const double jd = k_j2000_jd;
+    const Eigen::Vector3d B_eci = MagnetometerSensor::field_eci(r_eci, jd);
+
+    const Eigen::Matrix3d R_body_eci = Eigen::AngleAxisd(M_PI_2, Eigen::Vector3d::UnitX()).toRotationMatrix();
+    const Eigen::Vector3d expected_body = R_body_eci * B_eci;
+
+    MagnetometerSensor mag(0.0, 11);  // zero noise — exact rotation check
+    const Eigen::Vector3d measured = mag.measure_body(r_eci, jd, R_body_eci);
+    EXPECT_TRUE(measured.isApprox(expected_body, 1e-9));
+}
+
+TEST(Magnetometer, MeasureBodyIdentityMatchesEci) {
+    // Identity rotation must reduce exactly to the ECI field.
+    const double r0 = k_re + 408e3;
+    const Eigen::Vector3d r_eci(r0, 0.0, 0.0);
+    const double jd = k_j2000_jd;
+    const Eigen::Vector3d B_eci = MagnetometerSensor::field_eci(r_eci, jd);
+
+    MagnetometerSensor mag(0.0, 12);
+    const Eigen::Vector3d measured = mag.measure_body(r_eci, jd, Eigen::Matrix3d::Identity());
+    EXPECT_TRUE(measured.isApprox(B_eci, 1e-9));
+}
+
+// ───────────────────────────────── Gyro ────────────────────────────────────────
+
+TEST(Gyro, InitialBiasIsZero) {
+    GyroSensor gyro;
+    EXPECT_TRUE(gyro.bias.isZero());
+}
+
+TEST(Gyro, BiasDriftsWithTime) {
+    GyroSensor gyro(0.001, 0.0005, 43);
+    for (int i = 0; i < 1000; ++i) gyro.measure(Eigen::Vector3d::Zero(), 1.0);
+    EXPECT_GT(gyro.bias.norm(), 1e-6);
+}
+
+TEST(Gyro, NoBiasWalkWithZeroDt) {
+    GyroSensor gyro(0.001, 0.0005, 43);
+    for (int i = 0; i < 1000; ++i) gyro.measure(Eigen::Vector3d::Zero(), 0.0);
+    EXPECT_TRUE(gyro.bias.isZero());
+}
+
+TEST(Gyro, NoiseMeanNearTruth) {
+    constexpr double sigma_gyro = 0.001;
+    GyroSensor gyro(sigma_gyro, 0.0, 78);
+    const Eigen::Vector3d omega_true(0.05, -0.02, 0.03);
+
+    constexpr int N = 2000;
+    Eigen::Vector3d sum = Eigen::Vector3d::Zero();
+    for (int i = 0; i < N; ++i) sum += gyro.measure(omega_true, 0.0);
+
+    EXPECT_TRUE((sum / N - omega_true).cwiseAbs().maxCoeff() < 3.0 * sigma_gyro / std::sqrt(N));
 }

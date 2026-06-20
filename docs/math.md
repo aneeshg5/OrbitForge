@@ -259,3 +259,66 @@ For $N=100$, $n=6$ ($\nu = 600$): bounds $\approx [5.35,\, 6.69]$.
 **Process noise must be injected into the true trajectory to match filter $Q$.** If the true trajectory is purely deterministic (e.g. two-body RK4 with no random forcing) but the filter's $Q > 0$, the filter is provably underconfident: $P$ converges to a value set by $Q$ while the actual error converges toward zero (deterministic dynamics + the same integrator the filter assumes), so $\text{NEES} \to 0 \ll 6$. Conversely $Q=0$ makes $P \to 0$ as GPS updates accumulate while the actual error remains bounded by GPS noise statistics, so $\text{NEES} \to \infty$. The test (`test_filter_consistency.cpp`) resolves this by drawing $\mathbf{w} \sim \mathcal{N}(0, Q)$ each step and adding it directly to the true trajectory — making the stochastic model the filter assumes exactly the one realized, which is the textbook construction for an NEES Monte Carlo test on an otherwise-deterministic system.
 
 Test parameters: $N=100$ runs, 500 steps, $dt=10$ s, ISS circular orbit (two-body only), $\sigma_\text{gps}=10$ m, $\sigma_{Q,\text{pos}}=1$ m/step, $\sigma_{Q,\text{vel}}=0.01$ m/s/step, $P_0 = \text{diag}(100^2,100^2,100^2,1,1,1)$. Initial filter state error drawn from $P_0$. Pass criterion: $\geq 90\%$ of the 500 per-step averaged NEES values fall within $[5.35, 6.69]$.
+
+---
+
+## §7 Phase 5 — 6DOF Attitude Estimation
+
+KF is unaffected by this section (CLAUDE.md §6.1) — stays the 6-state $[\mathbf{r},\mathbf{v}]$ filter from §3 forever. Everything below applies only to EKF/UKF's new 12-state multiplicative-EKF (MEKF) attitude block, stacked with the *unchanged* §3.1 orbital block.
+
+### §7.1 Attitude Convention and Quaternion Kinematics
+
+$q$ is the unit quaternion rotating BODY-frame vectors into ECI: for body components $\mathbf{v}_b$, $\mathbf{v}_i = q\,\mathbf{v}_b\,q^{-1}$ (Hamilton product). Composition: $R(q_1 q_2) = R(q_1)R(q_2)$ (same order as the quaternion product); the ECI→body DCM is $A(q) = R(q)^\top$, which therefore composes in **reversed** order, $A(q_1 q_2) = A(q_2)A(q_1)$ — this is what fixes the MEKF reset-step composition order in §7.3.
+
+Quaternion kinematics:
+$$\dot{q} = \tfrac{1}{2}\, q \otimes [0,\boldsymbol{\omega}]$$
+where $\boldsymbol{\omega}$ is body-frame angular velocity and $[0,\boldsymbol{\omega}]$ is the pure-vector quaternion. Implemented in `math/quaternion.cpp::quat_kinematics_coeffs_dot` operating on `Eigen::Quaterniond::coeffs()` (note: **coeffs() order is $(x,y,z,w)$, constructor order is $(w,x,y,z)$** — an easy-to-invert Eigen footgun, flagged explicitly in the header).
+
+### §7.2 Euler's Equation (Torque-Free Rigid Body) and Its Jacobian
+
+Diagonal principal-axis inertia tensor $I = \text{diag}(I_x,I_y,I_z)$, no external torque (§18 — no actuators/gravity-gradient):
+$$\dot{\boldsymbol{\omega}} = I^{-1}\left(-\boldsymbol{\omega}\times(I\boldsymbol{\omega})\right)$$
+
+**Verification against the textbook component form** (sanity check before trusting the vector form): expanding $-\boldsymbol{\omega}\times(I\boldsymbol{\omega})$ component-wise reproduces the classical Euler's equations exactly, e.g. $I_y\dot\omega_y = (I_z-I_x)\omega_z\omega_x$ — confirms no sign error in the cross-product form used in code (`rigid_body.cpp` uses `omega.cross(i_omega)` directly rather than expanding components by hand, precisely to avoid this class of sign slip).
+
+**Jacobian** $\partial\dot{\boldsymbol{\omega}}/\partial\boldsymbol{\omega}$, needed for the EKF $F$ matrix (§7.3). Let $g(\boldsymbol{\omega}) = \boldsymbol{\omega}\times(I\boldsymbol{\omega})$. Differentiating with $I$ constant:
+$$dg = d\boldsymbol{\omega}\times(I\boldsymbol{\omega}) + \boldsymbol{\omega}\times(I\,d\boldsymbol{\omega}) = \big(-[(I\boldsymbol{\omega})\times] + [\boldsymbol{\omega}\times]I\big)\,d\boldsymbol{\omega}$$
+using $\mathbf{a}\times\mathbf{b} = -[\mathbf{b}\times]\mathbf{a}$ for the first term. So:
+$$\frac{\partial g}{\partial\boldsymbol{\omega}} = [\boldsymbol{\omega}\times]I - [(I\boldsymbol{\omega})\times], \qquad \frac{\partial\dot{\boldsymbol{\omega}}}{\partial\boldsymbol{\omega}} = -I^{-1}\left([\boldsymbol{\omega}\times]I - [(I\boldsymbol{\omega})\times]\right)$$
+**Validated in code, not just on paper**: `test_rigid_body.cpp`'s `EulerJacobianMatchesFiniteDifference` cross-checks this analytical form against central finite differences (passes to $10^{-6}$) — the same discipline as Phase 1's J2 Jacobian, satisfying CLAUDE.md §22 rule 6 ("don't guess at Jacobian terms").
+
+Note $\dot{\boldsymbol{\omega}}$ has **no dependence on attitude** — torque-free rotation is attitude-independent, so the Jacobian's $\partial\dot{\boldsymbol{\omega}}/\partial(\delta\theta)$ block is exactly zero (§7.3's $F$ matrix).
+
+### §7.3 MEKF Error Kinematics, $F$ Matrix, and Reset Step
+
+**Error definition** (body-frame multiplicative error, Lefferts–Markley–Shuster convention): let $A_\text{true}, A_\text{ref}$ be the true/reference ECI→body DCMs. Define $\delta A = A_\text{true}A_\text{ref}^\top$ (small misalignment, ref-body→true-body). Equivalently, in quaternion form (using §7.1's reversed composition rule):
+$$q_\text{true} = q_\text{ref}\otimes\delta q$$
+
+**Linearized error kinematics** — derived here directly from the unambiguous DCM kinematic law $\dot{A} = -[\boldsymbol{\omega}\times]A$ (rather than recalled from memory, since this filter's setup — $\boldsymbol{\omega}$ as a filter state via Euler's equation, not a directly-measured/bias-only quantity — is non-standard relative to most textbook MEKF derivations and deserves a from-scratch check):
+
+$$\dot{\delta A} = \dot{A}_\text{true}A_\text{ref}^\top + A_\text{true}\dot{A}_\text{ref}^\top = -[\boldsymbol{\omega}_\text{true}\times]\,\delta A + \delta A\,[\boldsymbol{\omega}_\text{ref}\times]$$
+
+Substituting the small-angle approximation $\delta A \approx I_3 - [\delta\boldsymbol{\theta}\times]$ and keeping first-order terms only (using the skew-commutator identity $[\mathbf{a}\times][\mathbf{b}\times]-[\mathbf{b}\times][\mathbf{a}\times] = [(\mathbf{a}\times\mathbf{b})\times]$, evaluated at $\boldsymbol{\omega}_\text{true}\approx\boldsymbol{\omega}_\text{ref}\approx\hat{\boldsymbol{\omega}}$ since the difference is already first-order):
+
+$$\boxed{\dot{\delta\boldsymbol{\theta}} = -\hat{\boldsymbol{\omega}}\times\delta\boldsymbol{\theta} + \delta\boldsymbol{\omega}}, \qquad \delta\boldsymbol{\omega} := \boldsymbol{\omega}_\text{true}-\hat{\boldsymbol{\omega}}\ \text{(the }\boldsymbol{\omega}\text{-state's own estimation error)}$$
+
+This is structurally identical to the orbital block's $\dot{\mathbf{e}_r} = \mathbf{e}_v$ (position-error rate equals velocity error) — attitude-error rate depends on both the current attitude error *and* the angular-velocity estimation error, not on $\delta\boldsymbol{\theta}$ alone.
+
+**Full 12×12 continuous Jacobian** (block-diagonal between attitude and orbital blocks — no coupling terms, §18):
+$$F = \begin{bmatrix} -[\hat{\boldsymbol{\omega}}\times] & I_3 & 0_3 & 0_3 \\ 0_3 & -I^{-1}([\hat{\boldsymbol{\omega}}\times]I-[(I\hat{\boldsymbol{\omega}})\times]) & 0_3 & 0_3 \\ 0_3 & 0_3 & 0_3 & I_3 \\ 0_3 & 0_3 & \partial\mathbf{a}/\partial\mathbf{r} & 0_3 \end{bmatrix}$$
+(state order $[\delta\boldsymbol{\theta},\boldsymbol{\omega},\mathbf{r},\mathbf{v}]$; the bottom-right 6×6 is exactly §3.1's unchanged orbital block.)
+
+**Reset step**, applied after every measurement update:
+$$q_\text{ref} \leftarrow \left(q_\text{ref}\otimes\delta q(\hat{\delta\boldsymbol{\theta}})\right)\!/\!\left|q_\text{ref}\otimes\delta q(\hat{\delta\boldsymbol{\theta}})\right|, \qquad \hat{\delta\boldsymbol{\theta}}\leftarrow \mathbf{0}$$
+**Right**-multiplication — directly forced by $q_\text{true}=q_\text{ref}\otimes\delta q$ above (substituting the posterior $\hat{\delta\boldsymbol{\theta}}$ for the true-but-unknown $\delta\boldsymbol{\theta}$ folds the estimated correction into $q_\text{ref}$ exactly). An earlier draft of this section had this backwards (left-multiplication) before this derivation was carried out carefully — corrected in CLAUDE.md to match.
+
+$\delta q(\delta\boldsymbol{\theta})$ is the quaternion exponential map (`math/quaternion.cpp::quat_exp`): exact axis-angle form $[\cos(|\delta\boldsymbol{\theta}|/2),\ \sin(|\delta\boldsymbol{\theta}|/2)\,\hat{\delta\boldsymbol{\theta}}]$, with a first-order Taylor fallback near $\delta\boldsymbol{\theta}=\mathbf{0}$ to avoid a 0/0 in the axis normalization.
+
+### §7.4 Gyro and Magnetometer Measurement Jacobians
+
+**Gyro** — direct measurement of the $\boldsymbol{\omega}$ state (sensor-side bias only, no filter bias state — CLAUDE.md §6.3, mirrors the existing IMU pattern):
+$$H_\text{gyro} = \begin{bmatrix}0_3 & I_3 & 0_3 & 0_3\end{bmatrix} \quad (3\times12)$$
+
+**Magnetometer** — predicted measurement $\hat{\mathbf{z}}_\text{mag} = A(q_\text{ref})\,\mathbf{B}_\text{ECI}(\hat{\mathbf{r}})$ (existing IGRF dipole model, §5.3, now finally consumed). Linearizing the rotation of a fixed vector by a perturbed quaternion ($A(q_\text{ref}\otimes\delta q)\mathbf{B} \approx (I_3-[\delta\boldsymbol{\theta}\times])A(q_\text{ref})\mathbf{B} = \hat{\mathbf{z}}_\text{mag} - \delta\boldsymbol{\theta}\times\hat{\mathbf{z}}_\text{mag} = \hat{\mathbf{z}}_\text{mag} + [\hat{\mathbf{z}}_\text{mag}\times]\delta\boldsymbol{\theta}$):
+$$H_\text{mag} = \begin{bmatrix}[\hat{\mathbf{z}}_\text{mag}\times] & 0_3 & 0_3 & 0_3\end{bmatrix} \quad (3\times12)$$
+$\partial\mathbf{B}_\text{ECI}/\partial\mathbf{r}$ is deliberately **not** included (treated as zero) — GPS already observes $\mathbf{r}$ directly and the true coupling is second-order; this is what keeps $F$ exactly block-diagonal between the attitude and orbital blocks (§18 simplification).

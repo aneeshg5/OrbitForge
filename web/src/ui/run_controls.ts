@@ -32,6 +32,12 @@ export class RunControls {
   private readonly toggleButton: HTMLButtonElement
   private readonly resetButton: HTMLButtonElement
   private state: RunState = 'idle'
+  // Whether ScenarioEditor.getConfig() would currently succeed — gates the
+  // toggle button only while idle (once running/paused, a config was
+  // already consumed, so pause/continue must stay clickable regardless).
+  // Starts false so the button is visibly disabled instead of silently
+  // doing nothing on a click before the first TLE has loaded.
+  private runEnabled = false
 
   constructor(container: HTMLElement, options: RunControlsOptions) {
     this.postToWorker = options.postToWorker
@@ -74,11 +80,21 @@ export class RunControls {
     this.render()
   }
 
+  /** Called by ScenarioEditor whenever getConfig() availability changes. */
+  setRunEnabled(enabled: boolean): void {
+    this.runEnabled = enabled
+    this.render()
+  }
+
   private render(): void {
     this.toggleButton.classList.remove('state-idle', 'state-running', 'state-paused')
     this.toggleButton.classList.add(`state-${this.state}`)
     const [icon, label] =
       this.state === 'running' ? ['⏸', 'Pause'] : this.state === 'paused' ? ['▶', 'Continue'] : ['▶', 'Run']
     setButtonContent(this.toggleButton, icon, label)
+
+    const disabled = this.state === 'idle' && !this.runEnabled
+    this.toggleButton.disabled = disabled
+    this.toggleButton.title = disabled ? 'Select a satellite or paste a TLE first' : ''
   }
 }

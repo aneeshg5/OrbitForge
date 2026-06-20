@@ -104,4 +104,12 @@ Eigen::Vector3d MagnetometerSensor::measure(const Eigen::Vector3d& r_eci,
            Eigen::Vector3d(dist_(rng_), dist_(rng_), dist_(rng_));
 }
 
+Eigen::Vector3d MagnetometerSensor::measure_body(const Eigen::Vector3d& r_eci,
+                                                  double julian_date,
+                                                  const Eigen::Matrix3d& R_body_eci)
+{
+    const Eigen::Vector3d b_body = R_body_eci * field_eci(r_eci, julian_date);
+    return b_body + Eigen::Vector3d(dist_(rng_), dist_(rng_), dist_(rng_));
+}
+
 } // namespace orbitforge::sensors

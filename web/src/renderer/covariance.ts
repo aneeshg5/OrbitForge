@@ -13,7 +13,7 @@
 // a bug — it would need StateFrame to carry off-diagonal covariance terms
 // to do the general case, which isn't currently planned.
 
-import { createProgram, type Mat4, SCENE_SCALE } from './gl_utils.js'
+import { createProgram, eciToScene, type Mat4, SCENE_SCALE } from './gl_utils.js'
 
 const VERTEX_SRC = `#version 300 es
 precision highp float;
@@ -119,11 +119,11 @@ export class CovarianceEllipsoidRenderer {
    * posVarianceDiag: [var_x, var_y, var_z] in m^2 (StateFrame's
    * *_cov_diag[0..2]).
    *
-   * Same (x,y,z) -> (x,z,-y) remap as orbit.ts (see its addPoint() for
-   * why) applied to both the center and the per-axis scale — the variance
-   * is diagonal/axis-aligned in ECI, so remapping which scene axis each
-   * sigma lands on keeps the ellipsoid aligned with the remapped position
-   * data instead of pointing the wrong way relative to it.
+   * The variance is diagonal/axis-aligned in ECI, so its per-axis sigma
+   * scale needs the same y/z axis swap as eciToScene's remap — but not
+   * the sign flip eciToScene applies to y, since a variance is a
+   * magnitude, not a direction; negating it would make max(0, v) zero it
+   * out below. Center (an actual position) does use the full eciToScene.
    */
   render(
     view: Mat4,
@@ -133,13 +133,14 @@ export class CovarianceEllipsoidRenderer {
     color: readonly [number, number, number],
   ): void {
     const gl = this.gl
-    const sigma3 = posVarianceDiag.map((v) => 3 * Math.sqrt(Math.max(0, v)) * SCENE_SCALE)
+    const sigma = (v: number): number => 3 * Math.sqrt(Math.max(0, v)) * SCENE_SCALE
+    const center = eciToScene(centerEci)
 
     const model = new Float32Array([
-      sigma3[0]!, 0, 0, 0,
-      0, sigma3[2]!, 0, 0,
-      0, 0, sigma3[1]!, 0,
-      centerEci[0] * SCENE_SCALE, centerEci[2] * SCENE_SCALE, -centerEci[1] * SCENE_SCALE, 1,
+      sigma(posVarianceDiag[0]), 0, 0, 0,
+      0, sigma(posVarianceDiag[2]), 0, 0,
+      0, 0, sigma(posVarianceDiag[1]), 0,
+      center[0] * SCENE_SCALE, center[1] * SCENE_SCALE, center[2] * SCENE_SCALE, 1,
     ])
 
     gl.useProgram(this.program)

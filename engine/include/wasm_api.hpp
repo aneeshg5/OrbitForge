@@ -8,14 +8,18 @@
 
 #include "constants.hpp"
 #include "dynamics/eom.hpp"
+#include "dynamics/rigid_body.hpp"
 #include "faults/fault_injector.hpp"
 #include "filters/ekf.hpp"
 #include "filters/kf.hpp"
 #include "filters/ukf.hpp"
+#include "math/quaternion.hpp"
 #include "memory/ring_buffer.hpp"
 #include "monte_carlo/mc_runner.hpp"
 #include "scenario.hpp"
 #include "sensors/gps.hpp"
+#include "sensors/gyro.hpp"
+#include "sensors/magnetometer.hpp"
 
 namespace orbitforge {
 
@@ -28,20 +32,31 @@ struct StateFrame {
 
     double true_pos[3] = {};
     double true_vel[3] = {};
+    double true_quat[4] = {};   // Phase 5: ECI<-body, Eigen::Quaterniond::coeffs() order (x,y,z,w)
+    double true_omega[3] = {};  // Phase 5: body-frame rad/s
 
+    // KF: UNCHANGED by Phase 5 — no attitude fields at all (deliberately
+    // absent, not zeroed — see CLAUDE.md §6.1/§21: KF doesn't carry an
+    // attitude state, so there is nothing to report here).
     double kf_pos[3] = {};
     double kf_vel[3] = {};
     double kf_cov_diag[6] = {};
     double kf_nis = 0.0;
 
+    // EKF: Phase 5 grows this from 6-state to 12-state MEKF.
     double ekf_pos[3] = {};
     double ekf_vel[3] = {};
-    double ekf_cov_diag[6] = {};
-    double ekf_nis = 0.0;
+    double ekf_quat[4] = {};      // q_ref AFTER reset_attitude_error() — the actual attitude estimate
+    double ekf_omega[3] = {};
+    double ekf_cov_diag[12] = {}; // [delta_theta(3), omega(3), r(3), v(3)] diagonal
+    double ekf_nis = 0.0;         // combined innovation across whichever of {GPS, gyro, mag} updated this tick
 
+    // UKF: same Phase 5 growth as EKF.
     double ukf_pos[3] = {};
     double ukf_vel[3] = {};
-    double ukf_cov_diag[6] = {};
+    double ukf_quat[4] = {};
+    double ukf_omega[3] = {};
+    double ukf_cov_diag[12] = {};
     double ukf_nis = 0.0;
 
     uint8_t active_fault = 0;
@@ -120,6 +135,15 @@ private:
     dynamics::PerturbationConfig perturb_true_;
     dynamics::PerturbationConfig perturb_nominal_;
 
+    // Phase 5: "true" attitude trajectory — independent RK4 integration
+    // (rigid_body.hpp's AttitudeState = [q.coeffs(), omega]), fully
+    // decoupled from x_true_ above (torque-free rotation doesn't depend
+    // on orbital state or vice versa — math.md §7.2). Not snapshotted for
+    // run_monte_carlo(): that campaign stays orbital-only by design
+    // (mc_runner.cpp's file doc) and never touches attitude.
+    dynamics::AttitudeState x_true_att_;
+    dynamics::InertiaTensor inertia_;
+
     monte_carlo::MCStats mc_stats_;
     size_t                mc_n_runs_ = 0;
 
@@ -127,6 +151,8 @@ private:
     filters::ExtendedKalmanFilter  ekf_;
     filters::UnscentedKalmanFilter ukf_;
     sensors::GpsSensor              gps_;
+    sensors::GyroSensor              gyro_;   // Phase 5
+    sensors::MagnetometerSensor      mag_;    // Phase 5
 
     faults::FaultQueue  fault_queue_;
     faults::FaultConfig active_fault_;

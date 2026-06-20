@@ -4,20 +4,20 @@
 #include "constants.hpp"
 
 #include <Eigen/Dense>
+#include <array>
 #include <cmath>
 
 namespace orbitforge::filters {
 
 namespace {
 
-// UKF scaled parameters: alpha=1e-3, kappa=0, beta=2
-// lambda = alpha^2*(n+kappa) - n = (1e-3)^2*6 - 6 ≈ -5.999994
-// n+lambda = alpha^2*(n+kappa) ≈ 6e-6  (sigma points very close to mean)
-// W_m0 ≈ -999999,  W_mi = W_ci ≈ 83333,  W_c0 ≈ -999996
-// (math.md §4)
-constexpr int    k_n   = 6;   // state dim
+// UKF scaled parameters: alpha=1e-3, kappa=0, beta=2, n=12 (Phase 5; was 6).
+// lambda = alpha^2*(n+kappa) - n = (1e-3)^2*12 - 12 ≈ -11.999988
+// (math.md §4.1's formulas, just n=12 now — weight values themselves
+// change with n, so the old §4.1 worked example no longer applies verbatim)
+constexpr int    k_n   = 12;  // state dim
 constexpr int    k_m   = 3;   // measurement dim
-constexpr int    k_ns  = 2 * k_n + 1;  // 13 sigma points
+constexpr int    k_ns  = 2 * k_n + 1;  // 25 sigma points
 
 inline void ukf_params(double& gamma, double& W_m0, double& W_mi,
                        double& W_c0, double& W_ci)
@@ -92,15 +92,16 @@ chol_from_qr(const Eigen::HouseholderQR<Eigen::Matrix<double, M, N>>& qr)
 } // namespace
 
 UnscentedKalmanFilter::UnscentedKalmanFilter()
-    : julian_date(orbitforge::k_j2000_jd)
+    : julian_date(orbitforge::k_j2000_jd),
+      q_ref(math::Quat::Identity())
 {
     x.setZero();
     P.setIdentity();
     Q.setZero();
     R.setZero();
-    S.setIdentity();   // S = I₆ = chol(P=I₆)
+    S.setIdentity();   // S = I₁₂ = chol(P=I₁₂)
     H.setZero();
-    H.block<3, 3>(0, 0).setIdentity();
+    H.block<3, 3>(0, 6).setIdentity();  // GPS-shaped default: position block, columns 6-8
 }
 
 void UnscentedKalmanFilter::predict(double dt)
@@ -109,7 +110,6 @@ void UnscentedKalmanFilter::predict(double dt)
     ukf_params(gamma, W_m0, W_mi, W_c0, W_ci);
 
     // === 1. Sigma points from current x and S ===
-    // chi_0 = x;  chi_i = x + gamma·S[:,i-1];  chi_{i+n} = x - gamma·S[:,i-1]
     Eigen::Matrix<double, k_n, k_ns> chi;
     chi.col(0) = x;
     for (int i = 0; i < k_n; ++i) {
@@ -117,23 +117,57 @@ void UnscentedKalmanFilter::predict(double dt)
         chi.col(i + k_n + 1) = x - gamma * S.col(i);
     }
 
-    // === 2. Propagate each sigma point through RK4 ===
+    // === 2. Propagate each sigma point ===
+    // Attitude block (delta_theta, omega): each sigma point's delta_theta_i
+    // is reified into an actual perturbed quaternion q_i = q_ref ⊗
+    // quat_exp(delta_theta_i), propagated through the SAME nonlinear rigid-
+    // body dynamics as the true trajectory (no Jacobian — the whole point
+    // of UKF), then converted back to a delta_theta relative to the newly-
+    // propagated reference q_ref_new (taken from sigma point 0, whose
+    // delta_theta is exactly 0 since chi.col(0) == x exactly — no
+    // perturbation — making its propagated q identical to what
+    // ExtendedKalmanFilter::predict() computes for q_ref alone).
+    // Orbital block (r,v): unchanged from Phase 1, fully decoupled from
+    // the attitude block (Euler's equation doesn't depend on attitude;
+    // orbital EOM doesn't depend on omega/attitude either).
     const double jd  = julian_date;
     const auto&  cfg = perturb_cfg;
+    const dynamics::InertiaTensor inertia_local = inertia;
+    const math::Quat q_ref_local = q_ref;
 
-    auto f_dyn = [&](double, const Eigen::Matrix<double, k_n, 1>& s) {
-        Eigen::Matrix<double, k_n, 1> ds;
+    auto orbital_dyn = [&jd, &cfg](double /*t*/, const Eigen::Matrix<double, 6, 1>& s) {
+        Eigen::Matrix<double, 6, 1> ds;
         ds.head<3>() = s.tail<3>();
         ds.tail<3>() = dynamics::compute_acceleration(s.head<3>(), s.tail<3>(), jd, cfg);
         return ds;
     };
+    auto att_dyn = [&inertia_local](double /*t*/, const dynamics::AttitudeState& s) {
+        return dynamics::attitude_derivative(s, inertia_local);
+    };
 
+    std::array<math::Quat, k_ns> q_star;
     Eigen::Matrix<double, k_n, k_ns> chi_star;
+
     for (int i = 0; i < k_ns; ++i) {
-        // rk4_step is templated on State; evaluate col(i) to a concrete vector
-        // so the deduced type is Matrix<double,6,1>, not a Block expression.
-        const Eigen::Matrix<double, k_n, 1> chi_i = chi.col(i);
-        chi_star.col(i) = rk4_step(chi_i, 0.0, dt, f_dyn);
+        const Eigen::Vector3d delta_theta_i = chi.col(i).head<3>();
+        const Eigen::Vector3d omega_i       = chi.col(i).segment<3>(3);
+        const Eigen::Matrix<double, 6, 1> rv_i = chi.col(i).tail<6>();
+
+        dynamics::AttitudeState att_i;
+        att_i.head<4>() = (q_ref_local * math::quat_exp(delta_theta_i)).normalized().coeffs();
+        att_i.tail<3>() = omega_i;
+        att_i = rk4_step(att_i, 0.0, dt, att_dyn);
+
+        q_star[i] = math::Quat(att_i[3], att_i[0], att_i[1], att_i[2]).normalized();
+        chi_star.col(i).segment<3>(3) = att_i.tail<3>();
+        chi_star.col(i).tail<6>() = rk4_step(rv_i, 0.0, dt, orbital_dyn);
+    }
+
+    // Sigma point 0 has delta_theta == 0 exactly, so q_star[0] IS the new q_ref.
+    const math::Quat q_ref_new = q_star[0];
+    for (int i = 0; i < k_ns; ++i) {
+        const math::Quat delta_q = (q_ref_new.conjugate() * q_star[i]).normalized();
+        chi_star.col(i).head<3>() = math::quat_log(delta_q);
     }
 
     // === 3. Predicted mean ===
@@ -141,9 +175,6 @@ void UnscentedKalmanFilter::predict(double dt)
     for (int i = 1; i < k_ns; ++i) x_pred += W_mi * chi_star.col(i);
 
     // === 4. SR covariance via QR of [sqrt(W_ci)·deviations | S_q] ===
-    // A^T has shape (2n+n)×n = 18×6:
-    //   rows 0..11:  sqrt(W_ci)·(chi_star_i - x_pred)^T  for i=1..12
-    //   rows 12..17: S_q   (lower-triangular Cholesky of Q)
     Eigen::LLT<Eigen::Matrix<double, k_n, k_n>> llt_Q(Q);
     const Eigen::Matrix<double, k_n, k_n> S_q = llt_Q.matrixL();
 
@@ -158,8 +189,6 @@ void UnscentedKalmanFilter::predict(double dt)
     S = chol_from_qr(qr);
 
     // === 5. Rank-1 update/downdate for i=0 sigma point ===
-    // W_c0 < 0 for alpha=1e-3, so this is a downdate.
-    // d0 ≈ 0 for smooth dynamics (chi_star_0 ≈ x_pred), so the downdate is tiny.
     const Eigen::Matrix<double, k_n, 1> d0 = chi_star.col(0) - x_pred;
     if (W_c0 < 0.0) {
         chol_rank1_update(S, std::sqrt(-W_c0) * d0, -1.0);
@@ -168,29 +197,36 @@ void UnscentedKalmanFilter::predict(double dt)
     }
 
     x = x_pred;
+    q_ref = q_ref_new;
     julian_date += dt / orbitforge::k_sec_per_day;
     P = S * S.transpose();
 }
 
 void UnscentedKalmanFilter::update(const Eigen::Matrix<double, 3, 1>& z)
 {
-    // For linear H (GPS position-only), the sigma-point weighted sums reduce to:
-    //   P_xy = P·Hᵀ  and  P_yy = H·P·Hᵀ + R
-    // so the Kalman gain and state update are identical to the EKF.
-    const Eigen::Matrix<double, 3, 3> S_innov = H * P * H.transpose() + R;
-    const Eigen::Matrix<double, 6, 3> K = P * H.transpose() * S_innov.inverse();
+    // For linear H, the sigma-point weighted sums reduce to standard
+    // Kalman equations, exactly as Phase 1 (the measurement models added
+    // in Phase 5 — gyro, magnetometer — are also linearized the same way
+    // here as in EKF; UKF's nonlinearity advantage is entirely in the
+    // predict step's attitude propagation, not in these linear-H updates).
+    const Eigen::Matrix<double, 3, 3>  S_innov = H * P * H.transpose() + R;
+    const Eigen::Matrix<double, 12, 3> K = P * H.transpose() * S_innov.inverse();
 
     x = x + K * (z - H * x);
 
-    // SR covariance update: P_new = P - K·S_innov·Kᵀ = S·Sᵀ - U·Uᵀ
-    // where U = K·chol(S_innov). Apply m=3 rank-1 Cholesky downdates.
     Eigen::LLT<Eigen::Matrix<double, 3, 3>> llt_innov(S_innov);
-    const Eigen::Matrix<double, 3, 3> S_innov_L = llt_innov.matrixL();
-    const Eigen::Matrix<double, 6, 3> U = K * S_innov_L;
+    const Eigen::Matrix<double, 3, 3>  S_innov_L = llt_innov.matrixL();
+    const Eigen::Matrix<double, 12, 3> U = K * S_innov_L;
     for (int j = 0; j < k_m; ++j) {
         chol_rank1_update(S, U.col(j), -1.0);
     }
     P = S * S.transpose();
+}
+
+void UnscentedKalmanFilter::reset_attitude_error() {
+    const Eigen::Vector3d delta_theta = x.head<3>();
+    q_ref = (q_ref * math::quat_exp(delta_theta)).normalized();
+    x.head<3>().setZero();
 }
 
 } // namespace orbitforge::filters

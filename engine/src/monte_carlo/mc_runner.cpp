@@ -56,16 +56,37 @@ struct PartialSums {
           final_pos_err(slice_count, 0.0) {}
 };
 
-template <typename Filter>
+// Off: index of the orbital position block within the filter's state
+// vector (0 for KF's 6-state [r,v]; 6 for EKF/UKF's 12-state
+// [delta_theta,omega,r,v] — Phase 5, math.md §7.3). This Monte Carlo
+// module deliberately stays an orbital-only consistency check (see file
+// doc and MCConfig's comment) even for the now-12-state EKF/UKF: the
+// attitude block (rows/cols 0..Off-1) gets a placeholder identity P/zero Q
+// and is never measured, but per F's exact block-diagonal structure
+// (math.md §7.3) it cannot influence the orbital block's statistics —
+// giving it a real (not singular) P is purely to keep UKF's S=chol(P)
+// well-defined, not because this campaign models attitude.
+template <typename Filter, int Off>
 Filter make_filter(const MCConfig& cfg) {
     Filter f;
-    f.x = cfg.x0;
-    f.P.setZero();
-    f.P.diagonal().template head<3>().setConstant(cfg.p0_pos * cfg.p0_pos);
-    f.P.diagonal().template tail<3>().setConstant(cfg.p0_vel * cfg.p0_vel);
+    f.x.setZero();
+    f.x.template segment<3>(Off)     = cfg.x0.template head<3>();
+    f.x.template segment<3>(Off + 3) = cfg.x0.template tail<3>();
+    f.P.setIdentity();  // placeholder PD default for any non-orbital block (no-op when Off==0)
+    f.P.diagonal().template segment<3>(Off).setConstant(cfg.p0_pos * cfg.p0_pos);
+    f.P.diagonal().template segment<3>(Off + 3).setConstant(cfg.p0_vel * cfg.p0_vel);
+    // Q must be strictly positive-definite, not just its orbital block:
+    // UKF::predict() takes a Cholesky factor of the FULL Q every tick
+    // (for the SR-form process-noise injection), and a singular Q there
+    // corrupts the entire QR-based S reconstruction — not just the
+    // singular sub-block — silently producing garbage covariance
+    // everywhere. EKF has no equivalent step, so this only bites UKF, but
+    // it's set unconditionally here for both to keep make_filter's
+    // contract simple (a tiny placeholder is harmless for EKF either way).
     f.Q.setZero();
-    f.Q.diagonal().template head<3>().setConstant(cfg.q_pos * cfg.q_pos);
-    f.Q.diagonal().template tail<3>().setConstant(cfg.q_vel * cfg.q_vel);
+    f.Q.diagonal().setConstant(1e-12);
+    f.Q.diagonal().template segment<3>(Off).setConstant(cfg.q_pos * cfg.q_pos);
+    f.Q.diagonal().template segment<3>(Off + 3).setConstant(cfg.q_vel * cfg.q_vel);
     f.R = Eigen::Matrix3d::Identity() * (cfg.gps_sigma * cfg.gps_sigma);
     return f;
 }
@@ -86,7 +107,7 @@ void configure_dynamics(filters::UnscentedKalmanFilter& f, const dynamics::Pertu
     f.S = f.P.llt().matrixL();
 }
 
-template <typename Filter>
+template <typename Filter, int N, int Off>
 void run_one(const MCConfig& cfg, unsigned run_seed, PartialSums& sums, double& final_pos_err_out) {
     std::mt19937 rng(run_seed);
     std::normal_distribution<double> ic_pos(0.0, cfg.p0_pos);
@@ -109,13 +130,13 @@ void run_one(const MCConfig& cfg, unsigned run_seed, PartialSums& sums, double& 
 
     Eigen::Matrix<double, 6, 1> x_true = cfg.x0;
 
-    Filter flt = make_filter<Filter>(cfg);
+    Filter flt = make_filter<Filter, Off>(cfg);
     configure_dynamics(flt, two_body, k_j2000_jd);
-    flt.x(0) += ic_pos(rng); flt.x(1) += ic_pos(rng); flt.x(2) += ic_pos(rng);
-    flt.x(3) += ic_vel(rng); flt.x(4) += ic_vel(rng); flt.x(5) += ic_vel(rng);
+    flt.x.template segment<3>(Off)     += Eigen::Vector3d(ic_pos(rng), ic_pos(rng), ic_pos(rng));
+    flt.x.template segment<3>(Off + 3) += Eigen::Vector3d(ic_vel(rng), ic_vel(rng), ic_vel(rng));
 
-    Eigen::Matrix<double, 3, 6> H;
-    H << Eigen::Matrix3d::Identity(), Eigen::Matrix3d::Zero();
+    Eigen::Matrix<double, 3, N> H = Eigen::Matrix<double, 3, N>::Zero();
+    H.template block<3, 3>(0, Off).setIdentity();
 
     for (int step = 0; step < cfg.n_steps; ++step) {
         x_true = rk4_step(x_true, 0.0, cfg.dt, f_dyn);
@@ -136,8 +157,11 @@ void run_one(const MCConfig& cfg, unsigned run_seed, PartialSums& sums, double& 
 
         flt.update(z);
 
-        const Eigen::Matrix<double, 6, 1> err = x_true - flt.x;
-        const Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(flt.P);
+        Eigen::Matrix<double, 6, 1> err;
+        err.template head<3>() = x_true.template head<3>() - flt.x.template segment<3>(Off);
+        err.template tail<3>() = x_true.template tail<3>() - flt.x.template segment<3>(Off + 3);
+        const Eigen::Matrix<double, 6, 6> P_orbit = flt.P.template block<6, 6>(Off, Off);
+        const Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(P_orbit);
         if (llt.info() == Eigen::Success) {
             sums.nees_sum[static_cast<size_t>(step)] += err.dot(llt.solve(err));
             sums.nees_cnt[static_cast<size_t>(step)]++;
@@ -154,9 +178,9 @@ void run_slice(const MCConfig& cfg, size_t begin, size_t end, PartialSums& sums)
         const unsigned run_seed = cfg.seed + static_cast<unsigned>(run) * 7919u + 1u;
         double final_pos_err = 0.0;
         switch (cfg.filter) {
-            case FilterKind::kf:  run_one<filters::KalmanFilter>(cfg, run_seed, sums, final_pos_err); break;
-            case FilterKind::ekf: run_one<filters::ExtendedKalmanFilter>(cfg, run_seed, sums, final_pos_err); break;
-            case FilterKind::ukf: run_one<filters::UnscentedKalmanFilter>(cfg, run_seed, sums, final_pos_err); break;
+            case FilterKind::kf:  run_one<filters::KalmanFilter, 6, 0>(cfg, run_seed, sums, final_pos_err); break;
+            case FilterKind::ekf: run_one<filters::ExtendedKalmanFilter, 12, 6>(cfg, run_seed, sums, final_pos_err); break;
+            case FilterKind::ukf: run_one<filters::UnscentedKalmanFilter, 12, 6>(cfg, run_seed, sums, final_pos_err); break;
         }
         sums.final_pos_err[run - begin] = final_pos_err;
     }

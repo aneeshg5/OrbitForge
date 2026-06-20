@@ -43,6 +43,8 @@ include_directories(include)
 set(ENGINE_SOURCES
     src/dynamics/eom.cpp
     src/dynamics/perturbations.cpp
+    src/dynamics/rigid_body.cpp
+    src/math/quaternion.cpp
     src/filters/kf.cpp
     src/filters/ekf.cpp
     src/filters/ukf.cpp
@@ -57,6 +59,8 @@ add_executable(orbitforge_tests
     tests/test_eom.cpp
     tests/test_rk4.cpp
     tests/test_rk45.cpp
+    tests/test_quaternion.cpp
+    tests/test_rigid_body.cpp
     tests/test_kf.cpp
     tests/test_ekf.cpp
     tests/test_ukf.cpp

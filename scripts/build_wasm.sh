@@ -47,6 +47,8 @@ em++ \
     -I"$EIGEN_INCLUDE" \
     "$ENGINE_DIR/src/dynamics/eom.cpp" \
     "$ENGINE_DIR/src/dynamics/perturbations.cpp" \
+    "$ENGINE_DIR/src/dynamics/rigid_body.cpp" \
+    "$ENGINE_DIR/src/math/quaternion.cpp" \
     "$ENGINE_DIR/src/filters/kf.cpp" \
     "$ENGINE_DIR/src/filters/ekf.cpp" \
     "$ENGINE_DIR/src/filters/ukf.cpp" \

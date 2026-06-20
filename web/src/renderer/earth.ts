@@ -40,6 +40,10 @@ precision highp float;
 uniform sampler2D u_earthTex;
 uniform bool u_hasTexture;
 uniform vec3 u_fallbackColor;
+// Sun direction (scene space, unit vector, Earth -> Sun) — see
+// solar_system.ts's sunDirectionScene(). Drives a day/night terminator
+// instead of the flat unlit shading this renderer had before.
+uniform vec3 u_sunDirWorld;
 
 in vec3 v_normalWorld;
 in vec3 v_viewDir;
@@ -52,14 +56,32 @@ void main() {
 
   vec3 n = normalize(v_normalWorld);
   vec3 v = normalize(v_viewDir);
-  float fresnel = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-  vec3 atmosphere = vec3(0.3, 0.6, 1.0) * fresnel * 0.8;
 
-  outColor = vec4(albedo + atmosphere, 1.0);
+  // Small ambient floor so the night side reads as dim, not pure black —
+  // real Earth's night side is faintly visible too (airglow/moonlight),
+  // and a true-black hemisphere looks like a rendering bug rather than
+  // night — but small enough that the terminator (the actual point of
+  // this shader) reads clearly: brightness should visibly come from the
+  // Sun's current direction, not from a flat scene-wide light.
+  float diffuse = max(dot(n, normalize(u_sunDirWorld)), 0.0);
+  // pow(diffuse, 0.7) lifts mid-tones (most of the visible dayside isn't
+  // pointed straight at the Sun) without touching the diffuse=0 floor, so
+  // the lit hemisphere reads as brightly sunlit while the terminator/night
+  // side stays exactly as dark as before.
+  float lit = 0.04 + 1.3 * pow(diffuse, 0.7);
+
+  // Scaled by lit, not added unconditionally: without this, the
+  // Fresnel rim glowed all the way around the limb regardless of
+  // day/night, which washed out the night side with a blue halo and
+  // made the terminator much less convincing.
+  float fresnel = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+  vec3 atmosphere = vec3(0.3, 0.6, 1.0) * fresnel * 0.8 * lit;
+
+  outColor = vec4(albedo * lit + atmosphere, 1.0);
 }
 `
 
-interface SphereGeometry {
+export interface SphereGeometry {
   positions: Float32Array
   normals: Float32Array
   uvs: Float32Array
@@ -67,7 +89,10 @@ interface SphereGeometry {
 }
 
 // Standard lat/lon UV sphere. Triangle count grows as latBands*lonBands*2.
-function buildSphere(radius: number, latBands: number, lonBands: number): SphereGeometry {
+// Exported for reuse by solar_system.ts's planet/Moon spheres — same
+// parameterization, just lower lat/lonBands since they're flat-shaded
+// and small on screen, with no texture UV precision to preserve.
+export function buildSphere(radius: number, latBands: number, lonBands: number): SphereGeometry {
   const positions: number[] = []
   const normals: number[] = []
   const uvs: number[] = []
@@ -125,6 +150,7 @@ export class EarthRenderer {
   private readonly uProj: WebGLUniformLocation | null
   private readonly uHasTexture: WebGLUniformLocation | null
   private readonly uFallbackColor: WebGLUniformLocation | null
+  private readonly uSunDirWorld: WebGLUniformLocation | null
 
   constructor(gl: WebGL2RenderingContext, textureUrl = '/earth_8k.jpg') {
     this.gl = gl
@@ -153,6 +179,7 @@ export class EarthRenderer {
     this.uProj = gl.getUniformLocation(this.program, 'u_proj')
     this.uHasTexture = gl.getUniformLocation(this.program, 'u_hasTexture')
     this.uFallbackColor = gl.getUniformLocation(this.program, 'u_fallbackColor')
+    this.uSunDirWorld = gl.getUniformLocation(this.program, 'u_sunDirWorld')
 
     const tex = gl.createTexture()
     if (!tex) throw new Error('createTexture failed')
@@ -193,7 +220,7 @@ export class EarthRenderer {
     image.src = url
   }
 
-  render(model: Mat4, view: Mat4, proj: Mat4): void {
+  render(model: Mat4, view: Mat4, proj: Mat4, sunDirWorld: readonly [number, number, number]): void {
     const gl = this.gl
     gl.useProgram(this.program)
     gl.bindVertexArray(this.vao)
@@ -203,6 +230,7 @@ export class EarthRenderer {
     gl.uniformMatrix4fv(this.uProj, false, proj)
     gl.uniform1i(this.uHasTexture, this.hasTexture ? 1 : 0)
     gl.uniform3f(this.uFallbackColor, 0.08, 0.25, 0.45)
+    gl.uniform3f(this.uSunDirWorld, sunDirWorld[0], sunDirWorld[1], sunDirWorld[2])
 
     if (this.hasTexture) {
       gl.activeTexture(gl.TEXTURE0)

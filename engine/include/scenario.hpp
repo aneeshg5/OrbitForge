@@ -24,6 +24,18 @@ struct ScenarioCfg {
     double q_vel        = 0.01;
     double sim_speed    = 1.0;
     int    seed         = -1;
+
+    // --- Phase 5: 6DOF attitude estimation (CLAUDE.md §6, §21) ---
+    double inertia_x   = 1.0;   // principal-axis inertia tensor, kg·m² (diagonal only, §18)
+    double inertia_y   = 1.0;
+    double inertia_z   = 1.0;
+    double gyro_sigma  = 0.001;  // rad/s, gyro measurement noise (math.md §7.4)
+    double mag_sigma   = 100.0;  // nT, magnetometer measurement noise (math.md §7.4)
+    double q_att        = 1e-6;   // process noise, attitude error (delta_theta) block
+    double q_omega       = 1e-8;   // process noise, angular velocity block
+    double init_omega_x = 0.0;    // initial true angular velocity, body-frame rad/s
+    double init_omega_y = 0.0;
+    double init_omega_z = 0.05;   // small default spin so the attitude demo is visibly tumbling
 };
 
 // Classical orbital elements extracted from a TLE, plus its epoch.

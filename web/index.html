@@ -89,14 +89,42 @@
     #layout { display: flex; flex: 1 1 auto; min-height: 0; }
     #scene-canvas { flex: 1 1 0%; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
 
-    #panels {
-      flex: 0 0 320px;
-      display: grid;
-      grid-template-rows: repeat(4, 1fr);
+    /* Scenario editor + fault injection: moved into the narrow right
+       sidebar (was the chart panels' spot) since these are low-density
+       controls — a handful of sliders/toggles/buttons — that don't need
+       much screen real estate, freeing the full-width strip below the
+       globe for the charts that actually benefit from more room. */
+    #controls {
+      flex: 0 0 300px;
+      display: flex;
+      flex-direction: column;
       gap: 8px;
       padding: 8px;
       border-left: 1px solid var(--border);
       overflow-y: auto;
+    }
+    .control-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      flex: 0 0 auto;
+    }
+
+    /* Chart panels: moved out of the cramped 320px sidebar (where 4
+       charts were squeezed into stacked rows ~70px tall) into a full-width
+       strip below the globe, laid out side by side — far more horizontal
+       resolution per chart, plus more vertical room to actually read
+       trends/consistency bounds. */
+    #panels {
+      flex: 0 0 300px;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: 1fr;
+      gap: 8px;
+      padding: 8px;
+      border-top: 1px solid var(--border);
     }
     .panel {
       background: var(--surface);
@@ -119,21 +147,27 @@
     }
     .panel-title .unit { font-weight: 400; text-transform: none; color: var(--text-faint); }
     .panel canvas { flex: 1 1 auto; min-height: 0; width: 100% !important; height: 100% !important; }
-
-    #controls {
-      flex: 0 0 auto;
-      display: flex;
-      gap: 12px;
-      padding: 12px 16px;
-      border-top: 1px solid var(--border);
-      overflow-y: auto;
-      max-height: 240px;
+    /* Replaces the old static .panel-title — same visual weight (small,
+       muted, uppercase-ish) but an actual control: each chart panel can
+       show any metric (position/velocity error norm or X/Y/Z, attitude
+       error, angular velocity error, covariance trace, NIS), not a fixed
+       one (CLAUDE.md §12 — user-requested "choose which graphs to see"). */
+    .panel-metric-select {
+      margin: 0 0 4px;
+      padding: 2px 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--text-muted);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      align-self: flex-start;
+      max-width: 100%;
     }
-    .control-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 10px 14px;
+    .panel-metric-select:hover, .panel-metric-select:focus-visible {
+      border-color: var(--border-strong);
+      color: var(--text);
     }
     .control-card h3 {
       margin: 0 0 8px;
@@ -147,6 +181,11 @@
     .scenario-editor, .fault-panel { display: flex; flex-direction: column; gap: 8px; font-size: 13px; flex: 1 1 auto; }
     .scenario-editor .row { display: flex; align-items: center; gap: 8px; }
     .scenario-editor .row label { color: var(--text-muted); min-width: 64px; font-size: 12px; }
+    /* The sidebar is much narrower now that scenario/fault controls live
+       there instead of spanning the full bottom bar — without this, the
+       satellite <select> sizes to its longest option text and overflows
+       the sidebar's right edge instead of wrapping/eliding within it. */
+    .scenario-editor .row select { flex: 1 1 auto; min-width: 0; }
     .fault-panel { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
 
     button {
@@ -164,6 +203,8 @@
     button:hover { background: #182038; border-color: var(--accent-primary); }
     button:active { transform: scale(0.97); }
     button:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    button:disabled:hover { background: var(--surface-2); border-color: var(--border-strong); }
 
     select, textarea, input[type='range'] {
       font-family: var(--font-ui);
@@ -255,10 +296,11 @@
       html, body, #app { height: auto; min-height: 100%; }
       #layout { flex-direction: column; }
       #scene-canvas { min-height: 280px; flex: 0 0 280px; }
-      /* 2x2 grid instead of 4 stacked rows — at this width, 4 stacked
-         rows squeeze each chart to ~60px tall and become illegible. */
-      #panels { flex: 0 0 360px; grid-template-rows: repeat(2, 1fr); grid-template-columns: repeat(2, 1fr); border-left: none; border-top: 1px solid var(--border); }
-      #controls { flex-direction: column; max-height: none; }
+      #controls { flex-direction: row; flex-wrap: wrap; flex: 0 0 auto; border-left: none; border-top: 1px solid var(--border); }
+      .control-card { flex: 1 1 260px; }
+      /* 2x2 grid instead of 4 side-by-side columns — at this width, 4
+         columns squeeze each chart too narrow to read. */
+      #panels { flex: 0 0 360px; min-height: 0; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); }
       .mc-charts-row { grid-template-columns: repeat(2, 1fr); height: auto; }
       .mc-charts-row .panel { height: 200px; }
     }
@@ -272,28 +314,28 @@
     </div>
     <div id="layout">
       <canvas id="scene-canvas"></canvas>
-      <div id="panels">
-        <div class="panel">
-          <h4 class="panel-title">Position Error <span class="unit">[m]</span></h4>
-          <canvas id="pos-err-canvas"></canvas>
-        </div>
-        <div class="panel">
-          <h4 class="panel-title">Velocity Error <span class="unit">[m/s]</span></h4>
-          <canvas id="vel-err-canvas"></canvas>
-        </div>
-        <div class="panel">
-          <h4 class="panel-title">Covariance Trace</h4>
-          <canvas id="cov-trace-canvas"></canvas>
-        </div>
-        <div class="panel">
-          <h4 class="panel-title">NIS <span class="unit">(consistency)</span></h4>
-          <canvas id="nis-canvas"></canvas>
-        </div>
+      <div id="controls">
+        <div id="scenario-editor-container" class="control-card"></div>
+        <div id="fault-panel-container" class="control-card"></div>
       </div>
     </div>
-    <div id="controls">
-      <div id="scenario-editor-container" class="control-card"></div>
-      <div id="fault-panel-container" class="control-card"></div>
+    <div id="panels">
+      <div class="panel">
+        <select class="panel-metric-select" id="panel-select-0" aria-label="Chart metric"></select>
+        <canvas id="pos-err-canvas"></canvas>
+      </div>
+      <div class="panel">
+        <select class="panel-metric-select" id="panel-select-1" aria-label="Chart metric"></select>
+        <canvas id="vel-err-canvas"></canvas>
+      </div>
+      <div class="panel">
+        <select class="panel-metric-select" id="panel-select-2" aria-label="Chart metric"></select>
+        <canvas id="cov-trace-canvas"></canvas>
+      </div>
+      <div class="panel">
+        <select class="panel-metric-select" id="panel-select-3" aria-label="Chart metric"></select>
+        <canvas id="nis-canvas"></canvas>
+      </div>
     </div>
     <div id="mc-results-container"></div>
   </div>

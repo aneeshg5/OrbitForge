@@ -15,27 +15,50 @@ export interface ScenarioConfig {
   qVel: number;            // process noise, velocity component
   simSpeed: number;        // real-time multiplier
   seed: number;            // RNG seed, -1 = random
+  // --- Phase 5: 6DOF (CLAUDE.md §6, §21) ---
+  inertiaX: number;        // principal-axis inertia tensor, kg·m²
+  inertiaY: number;
+  inertiaZ: number;
+  gyroSigma: number;       // rad/s, gyro measurement noise
+  magSigma: number;        // nT, magnetometer measurement noise
+  qAtt: number;            // process noise, attitude error (delta_theta) block
+  qOmega: number;          // process noise, angular velocity block
+  initOmegaX: number;      // initial true angular velocity, body-frame rad/s
+  initOmegaY: number;
+  initOmegaZ: number;
 }
+
+// Quaternion coefficients in Eigen::Quaterniond::coeffs() order (x,y,z,w) —
+// NOT (w,x,y,z). Represents the rotation from body to ECI (math/quaternion.hpp's
+// convention, CLAUDE.md §6).
+export type QuatCoeffs = [number, number, number, number];
 
 export interface StateFrame {
   simTime: number;         // seconds since epoch
   // True trajectory
   truePos: [number, number, number];
   trueVel: [number, number, number];
-  // KF
+  trueQuat: QuatCoeffs;        // Phase 5
+  trueOmega: [number, number, number];  // Phase 5, body-frame rad/s
+  // KF — unaffected by Phase 5: no attitude fields at all (§6.1), KF
+  // doesn't carry an attitude state, so there is nothing to read here.
   kfPos: [number, number, number];
   kfVel: [number, number, number];
   kfCovDiag: [number, number, number, number, number, number];
   kfNis: number;
-  // EKF
+  // EKF — Phase 5 grows this from 6-state to 12-state MEKF.
   ekfPos: [number, number, number];
   ekfVel: [number, number, number];
-  ekfCovDiag: [number, number, number, number, number, number];
+  ekfQuat: QuatCoeffs;         // Phase 5: q_ref AFTER the MEKF reset — the actual attitude estimate
+  ekfOmega: [number, number, number];   // Phase 5
+  ekfCovDiag: [number, number, number, number, number, number, number, number, number, number, number, number]; // Phase 5: grown 6->12, [delta_theta(3),omega(3),r(3),v(3)]
   ekfNis: number;
-  // UKF
+  // UKF — same Phase 5 growth as EKF.
   ukfPos: [number, number, number];
   ukfVel: [number, number, number];
-  ukfCovDiag: [number, number, number, number, number, number];
+  ukfQuat: QuatCoeffs;
+  ukfOmega: [number, number, number];
+  ukfCovDiag: [number, number, number, number, number, number, number, number, number, number, number, number];
   ukfNis: number;
   // Fault
   activeFault: number;     // FaultType enum value, 0 = none

@@ -7,6 +7,13 @@ import { PRESETS, fetchTleByNorad } from '../data/tle_feed.js'
 import type { OrbitalElements } from '../data/tle_parser.js'
 import type { ScenarioConfig } from '../bridge/wasm_types.js'
 
+export interface ScenarioEditorOptions {
+  // Fired whenever whether getConfig() would currently succeed changes —
+  // lets RunControls disable the Run button instead of silently no-op'ing
+  // when clicked with no TLE loaded yet (the bug this was added to fix).
+  onAvailabilityChange?: (available: boolean) => void
+}
+
 const DEFAULTS = {
   gpsSigma: 10,
   simSpeed: 1,
@@ -15,6 +22,14 @@ const DEFAULTS = {
   qPos: 1.0,
   qVel: 0.01,
   imuSigma: 0.05,
+  // Phase 5: 6DOF — no UI controls for these yet (CLAUDE.md §21), fixed
+  // defaults matching engine/include/scenario.hpp's ScenarioCfg defaults.
+  inertia: 1.0,
+  gyroSigma: 0.001,
+  magSigma: 100.0,
+  qAtt: 1e-6,
+  qOmega: 1e-8,
+  initOmegaZ: 0.05,
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
@@ -37,8 +52,10 @@ export class ScenarioEditor {
   private readonly dragCheckbox: HTMLInputElement
   private readonly srpCheckbox: HTMLInputElement
   private readonly statusLine: HTMLDivElement
+  private readonly onAvailabilityChange: (available: boolean) => void
 
-  constructor(container: HTMLElement) {
+  constructor(container: HTMLElement, options: ScenarioEditorOptions = {}) {
+    this.onAvailabilityChange = options.onAvailabilityChange ?? (() => {})
     this.root = el('div', 'scenario-editor')
 
     const heading = el('h3')
@@ -113,12 +130,27 @@ export class ScenarioEditor {
     this.satelliteSelect.addEventListener('change', () => {
       void this.onSatelliteChange()
     })
+    this.tleTextarea.addEventListener('input', () => {
+      this.notifyAvailability()
+    })
+
+    // Disabled until the first fetch (or paste) resolves — see
+    // notifyAvailability(); avoids the Run button silently no-op'ing.
+    this.notifyAvailability()
 
     // Default to the first preset (ISS) so Run works without extra clicks.
     if (PRESETS.length > 0) {
       this.satelliteSelect.value = String(PRESETS[0]!.noradId)
       void this.onSatelliteChange()
     }
+  }
+
+  private hasValidTle(): boolean {
+    return this.satelliteSelect.value === '__paste__' ? this.parsePastedTle() !== undefined : this.currentTle !== undefined
+  }
+
+  private notifyAvailability(): void {
+    this.onAvailabilityChange(this.hasValidTle())
   }
 
   private makeCheckbox(name: string, checked: boolean): { label: HTMLLabelElement; checkbox: HTMLInputElement } {
@@ -134,10 +166,12 @@ export class ScenarioEditor {
     const value = this.satelliteSelect.value
     if (value === '__paste__') {
       this.currentTle = undefined
+      this.notifyAvailability()
       return
     }
     const noradId = Number(value)
-    this.statusLine.textContent = 'Fetching TLE from CelesTrak...'
+    this.currentTle = undefined
+    this.notifyAvailability()
     try {
       const elements: OrbitalElements = await fetchTleByNorad(noradId)
       this.currentTle = { line1: elements.tleLine1, line2: elements.tleLine2 }
@@ -146,6 +180,7 @@ export class ScenarioEditor {
       this.statusLine.textContent = `Failed to fetch TLE: ${String(err)}`
       this.currentTle = undefined
     }
+    this.notifyAvailability()
   }
 
   private parsePastedTle(): { line1: string; line2: string } | undefined {
@@ -183,6 +218,16 @@ export class ScenarioEditor {
       qVel: DEFAULTS.qVel,
       simSpeed: Number(this.simSpeedInput.value),
       seed: -1,
+      inertiaX: DEFAULTS.inertia,
+      inertiaY: DEFAULTS.inertia,
+      inertiaZ: DEFAULTS.inertia,
+      gyroSigma: DEFAULTS.gyroSigma,
+      magSigma: DEFAULTS.magSigma,
+      qAtt: DEFAULTS.qAtt,
+      qOmega: DEFAULTS.qOmega,
+      initOmegaX: 0,
+      initOmegaY: 0,
+      initOmegaZ: DEFAULTS.initOmegaZ,
     }
   }
 }

@@ -24,6 +24,39 @@ void seed_filter(filters::FilterBase<6, 3>& filter, const Eigen::Matrix<double, 
     filter.R = Eigen::Matrix3d::Identity() * (gps_sigma * gps_sigma);
 }
 
+// Phase 5: seeds EKF/UKF's 12-state MEKF — [delta_theta(0-2), omega(3-5),
+// r(6-8), v(9-11)]. Initial attitude uncertainty (30 deg, 0.01 rad/s) is a
+// fixed default, not yet user-configurable (no UI control for it exists —
+// matches the existing precedent of p0_pos/p0_vel above also being fixed
+// constants rather than ScenarioCfg fields). R is set to the GPS default
+// here; Simulation::step() overwrites H/R before each individual
+// update() call (GPS, gyro, magnetometer all share one R slot per filter,
+// swapped per measurement type — see FilterBase's doc).
+template <typename Filter>
+void seed_filter_6dof(Filter& filter, const Eigen::Matrix<double, 6, 1>& x0, const ScenarioCfg& cfg) {
+    constexpr double k_p0_att   = 0.3 * 0.3;     // ~17 deg std dev, squared (rad^2)
+    constexpr double k_p0_omega = 0.01 * 0.01;   // rad/s, squared
+    constexpr double k_p0_pos   = 100.0 * 100.0;
+    constexpr double k_p0_vel   = 1.0 * 1.0;
+
+    filter.x.setZero();
+    filter.x.template segment<3>(6) = x0.template head<3>();
+    filter.x.template segment<3>(9) = x0.template tail<3>();
+    filter.P.setIdentity();  // overwritten on-diagonal below; off-diagonal stays 0
+    filter.P.diagonal().template segment<3>(0).setConstant(k_p0_att);
+    filter.P.diagonal().template segment<3>(3).setConstant(k_p0_omega);
+    filter.P.diagonal().template segment<3>(6).setConstant(k_p0_pos);
+    filter.P.diagonal().template segment<3>(9).setConstant(k_p0_vel);
+    filter.Q.setZero();
+    filter.Q.diagonal().template segment<3>(0).setConstant(cfg.q_att * cfg.q_att);
+    filter.Q.diagonal().template segment<3>(3).setConstant(cfg.q_omega * cfg.q_omega);
+    filter.Q.diagonal().template segment<3>(6).setConstant(cfg.q_pos * cfg.q_pos);
+    filter.Q.diagonal().template segment<3>(9).setConstant(cfg.q_vel * cfg.q_vel);
+    filter.R = Eigen::Matrix3d::Identity() * (cfg.gps_sigma * cfg.gps_sigma);
+    filter.inertia = dynamics::InertiaTensor{cfg.inertia_x, cfg.inertia_y, cfg.inertia_z};
+    filter.q_ref = math::Quat::Identity();
+}
+
 }  // namespace
 
 Simulation::Simulation() = default;
@@ -35,14 +68,24 @@ Simulation::~Simulation() {
 
 void Simulation::init_filters() {
     seed_filter(kf_, x_true_, cfg_.q_pos, cfg_.q_vel, cfg_.gps_sigma);
-    seed_filter(ekf_, x_true_, cfg_.q_pos, cfg_.q_vel, cfg_.gps_sigma);
-    seed_filter(ukf_, x_true_, cfg_.q_pos, cfg_.q_vel, cfg_.gps_sigma);
+    seed_filter_6dof(ekf_, x_true_, cfg_);
+    seed_filter_6dof(ukf_, x_true_, cfg_);
 
     ekf_.perturb_cfg = perturb_nominal_;
     ekf_.julian_date = epoch_jd_;
     ukf_.perturb_cfg = perturb_nominal_;
     ukf_.julian_date = epoch_jd_;
     ukf_.S = ukf_.P.llt().matrixL();
+
+    // Phase 5: "true" attitude trajectory, independent of x_true_ (math.md
+    // §7.2 — torque-free rotation doesn't depend on orbital state).
+    inertia_ = dynamics::InertiaTensor{cfg_.inertia_x, cfg_.inertia_y, cfg_.inertia_z};
+    x_true_att_.head<4>() = math::Quat::Identity().coeffs();
+    x_true_att_.tail<3>() = Eigen::Vector3d(cfg_.init_omega_x, cfg_.init_omega_y, cfg_.init_omega_z);
+
+    const unsigned base_seed = cfg_.seed >= 0 ? static_cast<unsigned>(cfg_.seed) : 42u;
+    gyro_ = sensors::GyroSensor(cfg_.gyro_sigma, 0.0005, base_seed + 1u);
+    mag_  = sensors::MagnetometerSensor(cfg_.mag_sigma, base_seed + 2u);
 }
 
 void Simulation::init_scenario(const ScenarioCfg& cfg) {
@@ -206,6 +249,20 @@ void Simulation::step(double dt) {
         x_true_.tail<3>() += active_fault_.magnitude * x_true_.tail<3>().normalized();
     }
 
+    // Phase 5: "true" attitude trajectory — independent RK4 step (math.md
+    // §7.2), fully decoupled from x_true_ above.
+    {
+        const dynamics::InertiaTensor inertia = inertia_;
+        auto att_dyn = [&inertia](double /*t*/, const dynamics::AttitudeState& s) {
+            return dynamics::attitude_derivative(s, inertia);
+        };
+        x_true_att_ = rk4_step(x_true_att_, 0.0, dt, att_dyn);
+        const math::Quat q_true = math::Quat(x_true_att_[3], x_true_att_[0], x_true_att_[1], x_true_att_[2]).normalized();
+        x_true_att_.head<4>() = q_true.coeffs();
+    }
+    const math::Quat q_true(x_true_att_[3], x_true_att_[0], x_true_att_[1], x_true_att_[2]);
+    const Eigen::Vector3d omega_true = x_true_att_.tail<3>();
+
     kf_.predict(dt);
     ekf_.predict(dt);
     ukf_.predict(dt);
@@ -215,7 +272,9 @@ void Simulation::step(double dt) {
     for (int i = 0; i < 3; ++i) {
         frame.true_pos[i] = x_true_(i);
         frame.true_vel[i] = x_true_(i + 3);
+        frame.true_omega[i] = omega_true(i);
     }
+    for (int i = 0; i < 4; ++i) frame.true_quat[i] = q_true.coeffs()(i);
 
     if (!gps_dropout_active) {
         const Eigen::Matrix3d R_ecef_eci = sensors::GpsSensor::R_ecef_eci(jd_now);
@@ -224,36 +283,90 @@ void Simulation::step(double dt) {
             z += Eigen::Vector3d(gps_spike_offset, 0.0, 0.0);
         }
 
-        Eigen::Matrix<double, 3, 6> H;
-        H << R_ecef_eci, Eigen::Matrix3d::Zero();
-        kf_.H = H;
-        ekf_.H = H;
-        ukf_.H = H;
+        Eigen::Matrix<double, 3, 6> H_kf;
+        H_kf << R_ecef_eci, Eigen::Matrix3d::Zero();
+        Eigen::Matrix<double, 3, 12> H_6dof = Eigen::Matrix<double, 3, 12>::Zero();
+        H_6dof.block<3, 3>(0, 6) = R_ecef_eci;
 
-        auto nis_of = [&z](const filters::FilterBase<6, 3>& f, const Eigen::Matrix<double, 3, 6>& h) {
-            const Eigen::Vector3d nu = z - h * f.x;
-            const Eigen::Matrix3d S = h * f.P * h.transpose() + f.R;
+        kf_.H  = H_kf;
+        ekf_.H = H_6dof;
+        ukf_.H = H_6dof;
+
+        auto nis = [&z](const Eigen::VectorXd& x, const Eigen::MatrixXd& P,
+                         const Eigen::MatrixXd& H, const Eigen::Matrix3d& R) {
+            const Eigen::Vector3d nu = z - H * x;
+            const Eigen::Matrix3d S = H * P * H.transpose() + R;
             return nu.dot(S.ldlt().solve(nu));
         };
-        frame.kf_nis  = nis_of(kf_, H);
-        frame.ekf_nis = nis_of(ekf_, H);
-        frame.ukf_nis = nis_of(ukf_, H);
+        // NIS uses dynamically-sized Eigen::MatrixXd/VectorXd views purely
+        // to share one lambda across KF's 6-state and EKF/UKF's 12-state —
+        // a deliberate, deliberately-contained exception to §20's "never
+        // MatrixXd in engine/" rule: this runs once per tick (not the hot
+        // predict/update path) and avoids three near-duplicate copies of
+        // the same five-line computation.
+        frame.kf_nis  = nis(kf_.x, kf_.P, H_kf, kf_.R);
+        frame.ekf_nis = nis(ekf_.x, ekf_.P, H_6dof, ekf_.R);
+        frame.ukf_nis = nis(ukf_.x, ukf_.P, H_6dof, ukf_.R);
 
         kf_.update(z);
         ekf_.update(z);
         ukf_.update(z);
     }
 
+    // Phase 5: gyro + magnetometer updates, EKF/UKF only (KF has no
+    // attitude state to update, §6.1) — fire every tick, no dropout fault
+    // modeled for these yet (§9's fault list only covers GPS/IMU/drag).
+    {
+        const Eigen::Vector3d z_gyro = gyro_.measure(omega_true, dt);
+        Eigen::Matrix<double, 3, 12> H_gyro = Eigen::Matrix<double, 3, 12>::Zero();
+        H_gyro.block<3, 3>(0, 3).setIdentity();
+        const Eigen::Matrix3d R_gyro = Eigen::Matrix3d::Identity() * (cfg_.gyro_sigma * cfg_.gyro_sigma);
+
+        ekf_.H = H_gyro; ekf_.R = R_gyro; ekf_.update(z_gyro);
+        ukf_.H = H_gyro; ukf_.R = R_gyro; ukf_.update(z_gyro);
+
+        const Eigen::Matrix3d R_body_eci_true = q_true.conjugate().toRotationMatrix();
+        const Eigen::Vector3d z_mag = mag_.measure_body(x_true_.head<3>(), jd_now, R_body_eci_true);
+        const Eigen::Matrix3d R_mag = Eigen::Matrix3d::Identity() * (cfg_.mag_sigma * cfg_.mag_sigma);
+
+        auto mag_update = [&](auto& filt) {
+            const Eigen::Vector3d r_hat = filt.x.template segment<3>(6);
+            const Eigen::Vector3d b_eci = sensors::MagnetometerSensor::field_eci(r_hat, jd_now);
+            const Eigen::Vector3d z_pred = filt.q_ref.conjugate().toRotationMatrix() * b_eci;
+            Eigen::Matrix<double, 3, 12> H_mag = Eigen::Matrix<double, 3, 12>::Zero();
+            H_mag.block<3, 3>(0, 0) = math::skew(z_pred);
+            filt.H = H_mag;
+            filt.R = R_mag;
+            filt.update(z_mag);
+        };
+        mag_update(ekf_);
+        mag_update(ukf_);
+
+        // MEKF reset (math.md §7.3): fold all of this tick's accumulated
+        // delta_theta correction into q_ref once, after every update()
+        // call above — not after each one individually.
+        ekf_.reset_attitude_error();
+        ukf_.reset_attitude_error();
+    }
+
     for (int i = 0; i < 3; ++i) {
         frame.kf_pos[i]  = kf_.x(i);
         frame.kf_vel[i]  = kf_.x(i + 3);
-        frame.ekf_pos[i] = ekf_.x(i);
-        frame.ekf_vel[i] = ekf_.x(i + 3);
-        frame.ukf_pos[i] = ukf_.x(i);
-        frame.ukf_vel[i] = ukf_.x(i + 3);
+        frame.ekf_pos[i] = ekf_.x(i + 6);
+        frame.ekf_vel[i] = ekf_.x(i + 9);
+        frame.ekf_omega[i] = ekf_.x(i + 3);
+        frame.ukf_pos[i] = ukf_.x(i + 6);
+        frame.ukf_vel[i] = ukf_.x(i + 9);
+        frame.ukf_omega[i] = ukf_.x(i + 3);
+    }
+    for (int i = 0; i < 4; ++i) {
+        frame.ekf_quat[i] = ekf_.q_ref.coeffs()(i);
+        frame.ukf_quat[i] = ukf_.q_ref.coeffs()(i);
     }
     for (int i = 0; i < 6; ++i) {
         frame.kf_cov_diag[i]  = kf_.P(i, i);
+    }
+    for (int i = 0; i < 12; ++i) {
         frame.ekf_cov_diag[i] = ekf_.P(i, i);
         frame.ukf_cov_diag[i] = ukf_.P(i, i);
     }
@@ -305,7 +418,14 @@ EMSCRIPTEN_KEEPALIVE
 void init_scenario(const char* tle_line1, const char* tle_line2, double gps_sigma,
                     double imu_sigma, int enable_j2, int enable_drag, int enable_srp,
                     double drag_coeff, double area_to_mass, double q_pos, double q_vel,
-                    double sim_speed, int seed) {
+                    double sim_speed, int seed,
+                    // Phase 5: 6DOF (CLAUDE.md §21) — appended after the
+                    // Phase 1-4 params so existing positional ccall sites
+                    // would only break if they don't pass these, not
+                    // silently misread an earlier argument.
+                    double inertia_x, double inertia_y, double inertia_z,
+                    double gyro_sigma, double mag_sigma, double q_att, double q_omega,
+                    double init_omega_x, double init_omega_y, double init_omega_z) {
     orbitforge::ScenarioCfg cfg;
     std::snprintf(cfg.tle_line1, sizeof(cfg.tle_line1), "%s", tle_line1);
     std::snprintf(cfg.tle_line2, sizeof(cfg.tle_line2), "%s", tle_line2);
@@ -320,6 +440,16 @@ void init_scenario(const char* tle_line1, const char* tle_line2, double gps_sigm
     cfg.q_vel = q_vel;
     cfg.sim_speed = sim_speed;
     cfg.seed = seed;
+    cfg.inertia_x = inertia_x;
+    cfg.inertia_y = inertia_y;
+    cfg.inertia_z = inertia_z;
+    cfg.gyro_sigma = gyro_sigma;
+    cfg.mag_sigma = mag_sigma;
+    cfg.q_att = q_att;
+    cfg.q_omega = q_omega;
+    cfg.init_omega_x = init_omega_x;
+    cfg.init_omega_y = init_omega_y;
+    cfg.init_omega_z = init_omega_z;
     orbitforge::init_scenario(cfg);
 }
 

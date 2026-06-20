@@ -1,11 +1,12 @@
-// Procedural starfield backdrop. Not a literal solar-system renderer
-// (OrbitForge is an Earth-orbit estimation tool, not a planetary
-// visualizer) and not a real star catalog (no RA/Dec data sourced here,
-// so constellations aren't astronomically accurate) — this is a believable deep-space
-// backdrop: a uniform scattering of dim background stars, a denser/
-// brighter band standing in for the Milky Way, and a handful of brighter
-// foreground stars, all generated from a fixed seed so the sky is the
-// same every load rather than reshuffling on every page refresh.
+// Procedural starfield backdrop — the fixed, infinitely-distant sky
+// behind the actual solar system (see solar_system.ts for the Sun,
+// Moon, and planets, which do have real in-scene positions). Not a real
+// star catalog (no RA/Dec data sourced here, so constellations aren't
+// astronomically accurate) — this is a believable deep-space backdrop: a
+// uniform scattering of dim background stars, a denser/brighter band
+// standing in for the Milky Way, and a handful of brighter foreground
+// stars, all generated from a fixed seed so the sky is the same every
+// load rather than reshuffling on every page refresh.
 //
 // Rendered as GL_POINTS on a sphere far outside the camera's max zoom
 // distance, using a rotation-only view matrix (gl_utils.mat4StripTranslation)

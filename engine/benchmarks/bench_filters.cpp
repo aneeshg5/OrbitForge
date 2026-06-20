@@ -38,13 +38,21 @@ void configure(KalmanFilter& kf) {
     for (int i = 0; i < 3; ++i) kf.R(i, i) = 100.0;
 }
 
+// Phase 5: EKF/UKF are 12-state MEKF — [delta_theta(0-2), omega(3-5),
+// r(6-8), v(9-11)] (see ekf.hpp/ukf.hpp). P/Q/R below are uniform across
+// all 12 states (setIdentity()*scale), so no separate attitude-block
+// placeholder is needed the way mc_runner.cpp/test_filter_consistency.cpp
+// require — this benchmark just measures raw step cost, not consistency.
+
 void configure(ExtendedKalmanFilter& ekf) {
-    ekf.x = iss_state();
+    ekf.x.setZero();
+    ekf.x.segment<3>(6) = iss_state().head<3>();
+    ekf.x.segment<3>(9) = iss_state().tail<3>();
     ekf.P.setIdentity();
     ekf.P *= 100.0;
     ekf.Q.setZero();
-    for (int i = 0; i < 3; ++i) ekf.Q(i, i) = 1e-4;
-    for (int i = 3; i < 6; ++i) ekf.Q(i, i) = 1e-8;
+    for (int i = 6; i < 9; ++i) ekf.Q(i, i) = 1e-4;
+    for (int i = 9; i < 12; ++i) ekf.Q(i, i) = 1e-8;
     ekf.R.setZero();
     for (int i = 0; i < 3; ++i) ekf.R(i, i) = 100.0;
     ekf.perturb_cfg.enable_j2   = true;   // matches EKF's analytical Jacobian (gravity+J2)
@@ -53,14 +61,16 @@ void configure(ExtendedKalmanFilter& ekf) {
 }
 
 void configure(UnscentedKalmanFilter& ukf) {
-    ukf.x = iss_state();
+    ukf.x.setZero();
+    ukf.x.segment<3>(6) = iss_state().head<3>();
+    ukf.x.segment<3>(9) = iss_state().tail<3>();
     ukf.P.setIdentity();
     ukf.P *= 100.0;
-    Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(ukf.P);
+    Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt(ukf.P);
     ukf.S = llt.matrixL();
     ukf.Q.setZero();
-    for (int i = 0; i < 3; ++i) ukf.Q(i, i) = 1e-4;
-    for (int i = 3; i < 6; ++i) ukf.Q(i, i) = 1e-8;
+    for (int i = 6; i < 9; ++i) ukf.Q(i, i) = 1e-4;
+    for (int i = 9; i < 12; ++i) ukf.Q(i, i) = 1e-8;
     ukf.R.setZero();
     for (int i = 0; i < 3; ++i) ukf.R(i, i) = 100.0;
     ukf.perturb_cfg.enable_j2   = true;
@@ -95,7 +105,7 @@ double bench_ekf_step(int iterations) {
     const auto t0 = Clock::now();
     for (int i = 0; i < iterations; ++i) {
         ekf.predict(k_dt);
-        ekf.update(ekf.x.head<3>());
+        ekf.update(ekf.x.segment<3>(6));
     }
     const auto t1 = Clock::now();
     volatile double sink = ekf.x.norm();
@@ -109,7 +119,7 @@ double bench_ukf_step(int iterations) {
     const auto t0 = Clock::now();
     for (int i = 0; i < iterations; ++i) {
         ukf.predict(k_dt);
-        ukf.update(ukf.x.head<3>());
+        ukf.update(ukf.x.segment<3>(6));
     }
     const auto t1 = Clock::now();
     volatile double sink = ukf.x.norm();
@@ -125,8 +135,8 @@ double bench_three_filters_step(int iterations) {
     const auto t0 = Clock::now();
     for (int i = 0; i < iterations; ++i) {
         kf.predict(k_dt);   kf.update(kf.x.head<3>());
-        ekf.predict(k_dt);  ekf.update(ekf.x.head<3>());
-        ukf.predict(k_dt);  ukf.update(ukf.x.head<3>());
+        ekf.predict(k_dt);  ekf.update(ekf.x.segment<3>(6));
+        ukf.predict(k_dt);  ukf.update(ukf.x.segment<3>(6));
     }
     const auto t1 = Clock::now();
     volatile double sink = kf.x.norm() + ekf.x.norm() + ukf.x.norm();

@@ -9,7 +9,9 @@ import { EarthRenderer } from './renderer/earth.js'
 import { RotationAxisRenderer } from './renderer/axis.js'
 import { OrbitPathRenderer } from './renderer/orbit.js'
 import { CovarianceEllipsoidRenderer } from './renderer/covariance.js'
+import { AttitudeTriadRenderer } from './renderer/attitude.js'
 import { Starfield } from './renderer/starfield.js'
+import { SolarSystemRenderer, sunDirectionScene } from './renderer/solar_system.js'
 import { PanelManager } from './renderer/panels.js'
 import { mat4LookAt, mat4Multiply, mat4Perspective, mat4RotateY, mat4RotateZ, mat4StripTranslation, type Mat4, FILTER_COLOR_RGB } from './renderer/gl_utils.js'
 import { ScenarioEditor } from './ui/scenario_editor.js'
@@ -48,10 +50,12 @@ const EARTH_SPIN_RAD_PER_SEC = (2 * Math.PI) / 20
 interface Scene {
   gl: WebGL2RenderingContext
   starfield: Starfield
+  solarSystem: SolarSystemRenderer
   earth: EarthRenderer
   axis: RotationAxisRenderer
   orbits: OrbitPathRenderer
   covariances: CovarianceEllipsoidRenderer
+  attitude: AttitudeTriadRenderer
   panels: PanelManager
   canvas: HTMLCanvasElement
 }
@@ -164,20 +168,30 @@ function setupScene(): Scene {
   const gl = canvas.getContext('webgl2')
   if (!gl) throw new Error('WebGL2 not available')
 
-  const posErrCanvas = document.getElementById('pos-err-canvas') as HTMLCanvasElement
-  const velErrCanvas = document.getElementById('vel-err-canvas') as HTMLCanvasElement
-  const covTraceCanvas = document.getElementById('cov-trace-canvas') as HTMLCanvasElement
-  const nisCanvas = document.getElementById('nis-canvas') as HTMLCanvasElement
+  const panelCanvases: [HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement, HTMLCanvasElement] = [
+    document.getElementById('pos-err-canvas') as HTMLCanvasElement,
+    document.getElementById('vel-err-canvas') as HTMLCanvasElement,
+    document.getElementById('cov-trace-canvas') as HTMLCanvasElement,
+    document.getElementById('nis-canvas') as HTMLCanvasElement,
+  ]
+  const panelSelects: [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement, HTMLSelectElement] = [
+    document.getElementById('panel-select-0') as HTMLSelectElement,
+    document.getElementById('panel-select-1') as HTMLSelectElement,
+    document.getElementById('panel-select-2') as HTMLSelectElement,
+    document.getElementById('panel-select-3') as HTMLSelectElement,
+  ]
 
   return {
     gl,
     canvas,
     starfield: new Starfield(gl),
+    solarSystem: new SolarSystemRenderer(gl),
     earth: new EarthRenderer(gl),
     axis: new RotationAxisRenderer(gl),
     orbits: new OrbitPathRenderer(gl),
     covariances: new CovarianceEllipsoidRenderer(gl),
-    panels: new PanelManager(posErrCanvas, velErrCanvas, covTraceCanvas, nisCanvas),
+    attitude: new AttitudeTriadRenderer(gl),
+    panels: new PanelManager(panelCanvases, panelSelects),
   }
 }
 
@@ -216,24 +230,42 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   // spin (see EARTH_SPIN_RAD_PER_SEC above), so it keeps turning whether
   // the sim is idle, running, or paused, the way a desk globe would —
   // tying it to sim_time would freeze it whenever the sim isn't running.
-  const spinAngle = (performance.now() / 1000) * EARTH_SPIN_RAD_PER_SEC % (2 * Math.PI)
+  const tSec = performance.now() / 1000
+  const spinAngle = (tSec * EARTH_SPIN_RAD_PER_SEC) % (2 * Math.PI)
   const earthModel = mat4RotateY(spinAngle)
 
-  // Rendered first so Earth/orbits naturally occlude it via the depth
-  // test — see starfield.ts for why a translation-stripped view matrix
-  // is what makes it behave as "infinitely far" rather than drifting
-  // when the camera zooms.
-  scene.starfield.render(mat4StripTranslation(view), proj)
+  // Current Sun direction (Earth -> Sun, stylized, wall-clock-driven) —
+  // see solar_system.ts's sunDirectionScene(). Used as the light source
+  // for both Earth and the Moon, so the visible Sun position and the lit
+  // hemisphere always stay in sync as the Sun orbits.
+  const sunDirScene = sunDirectionScene(tSec)
 
-  scene.earth.render(earthModel, view, proj)
+  // Starfield still uses a translation-stripped view (genuinely
+  // infinitely distant) — see starfield.ts. The Sun and Moon are real,
+  // near scene objects now (see solar_system.ts's module comment) and
+  // use the ordinary view matrix below.
+  const viewRotation = mat4StripTranslation(view)
+  scene.starfield.render(viewRotation, proj)
+
+  scene.earth.render(earthModel, view, proj, sunDirScene)
   scene.axis.render(view, proj)
   scene.orbits.render(view, proj)
 
   if (latestFrame) {
+    // KF's cov diag is [r(3),v(3)] — position variance stays at [0..2].
+    // EKF/UKF's is Phase 5's 12-state [delta_theta(3),omega(3),r(3),v(3)]
+    // — position variance moved to [6..8] (index [0..2] is now the
+    // attitude-error variance, a different physical quantity entirely).
     scene.covariances.render(view, proj, latestFrame.kfPos, [latestFrame.kfCovDiag[0], latestFrame.kfCovDiag[1], latestFrame.kfCovDiag[2]], FILTER_COLOR_RGB.kf)
-    scene.covariances.render(view, proj, latestFrame.ekfPos, [latestFrame.ekfCovDiag[0], latestFrame.ekfCovDiag[1], latestFrame.ekfCovDiag[2]], FILTER_COLOR_RGB.ekf)
-    scene.covariances.render(view, proj, latestFrame.ukfPos, [latestFrame.ukfCovDiag[0], latestFrame.ukfCovDiag[1], latestFrame.ukfCovDiag[2]], FILTER_COLOR_RGB.ukf)
+    scene.covariances.render(view, proj, latestFrame.ekfPos, [latestFrame.ekfCovDiag[6], latestFrame.ekfCovDiag[7], latestFrame.ekfCovDiag[8]], FILTER_COLOR_RGB.ekf)
+    scene.covariances.render(view, proj, latestFrame.ukfPos, [latestFrame.ukfCovDiag[6], latestFrame.ukfCovDiag[7], latestFrame.ukfCovDiag[8]], FILTER_COLOR_RGB.ukf)
+
+    // Phase 5: true-attitude body-axes triad — see attitude.ts's doc for
+    // why this renders only the true attitude, not EKF/UKF estimates too.
+    scene.attitude.render(view, proj, latestFrame.truePos, latestFrame.trueQuat)
   }
+
+  scene.solarSystem.render(view, proj, sunDirScene, tSec)
 
   scene.panels.render()
 }
@@ -297,11 +329,18 @@ async function main(): Promise<void> {
 
   const scenarioContainer = document.getElementById('scenario-editor-container')!
   const faultContainer = document.getElementById('fault-panel-container')!
-  const scenarioEditor = new ScenarioEditor(scenarioContainer)
   new FaultPanel(faultContainer, { postToWorker })
 
+  // RunControls.getConfig needs scenarioEditor and scenarioEditor's
+  // availability callback needs runControls — constructed in this order
+  // (runControls first, referencing scenarioEditor only inside a closure
+  // invoked later on click) to break the cycle without a null check.
+  let scenarioEditor: ScenarioEditor
   const runControlsContainer = document.getElementById('run-controls-container')!
-  new RunControls(runControlsContainer, { postToWorker, getConfig: () => scenarioEditor.getConfig() })
+  const runControls = new RunControls(runControlsContainer, { postToWorker, getConfig: () => scenarioEditor.getConfig() })
+  scenarioEditor = new ScenarioEditor(scenarioContainer, {
+    onAvailabilityChange: (available) => runControls.setRunEnabled(available),
+  })
 }
 
 main().catch((err: unknown) => console.error('OrbitForge init failed:', err))

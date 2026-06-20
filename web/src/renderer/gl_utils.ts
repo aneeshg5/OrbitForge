@@ -143,6 +143,21 @@ export function createProgram(gl: WebGL2RenderingContext, vsSource: string, fsSo
 /** Scene-unit scale: 1 scene unit = 1 Earth radius (k_re = 6.3781e6 m). */
 export const SCENE_SCALE = 1 / 6.3781e6
 
+/**
+ * Remaps an ECI vector (x toward vernal equinox, z toward celestial north
+ * — see CLAUDE.md §6) onto scene axes, where scene-Y is the pole (matching
+ * earth.ts's sphere and the camera's world-Y-centric orbit convention —
+ * see main.ts's EARTH_TILT comment for why the remap lives here instead of
+ * on Earth's mesh). (x,y,z) -> (x,z,-y) is a proper -90deg rotation about
+ * X (determinant +1), not a raw component swap, so handedness is
+ * preserved. Does not apply SCENE_SCALE — callers scale before or after
+ * as appropriate (orbit/covariance data is in meters; the solar system's
+ * synthetic positions are already in scene units).
+ */
+export function eciToScene(v: readonly [number, number, number]): [number, number, number] {
+  return [v[0], v[2], -v[1]]
+}
+
 // Normalized (0-1) RGB matching index.html's --accent-blue/--accent-teal/
 // --accent-orange tokens and panels.ts's Chart.js series colors, so the
 // same filter reads as the same color in the 3D scene and the charts.

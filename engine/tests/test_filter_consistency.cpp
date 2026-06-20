@@ -37,7 +37,20 @@ static inline double iss_v0() { return std::sqrt(k_mu / k_r0); }
 // q_pos: per-step process noise std dev for position [m]
 // q_vel: per-step process noise std dev for velocity [m/s]
 // These must match what make_filter() sets in Filter::Q.
-template <typename Filter, typename MakeFilter>
+//
+// Off: index of the orbital position block in Filter's state vector (0 for
+// the historical 6-state [r,v]; 6 for Phase 5's 12-state EKF/UKF MEKF
+// [delta_theta,omega,r,v] — see ekf.hpp/ukf.hpp). This test stays an
+// orbital-only NEES check even for 12-state filters — the attitude block
+// is given a placeholder P (set inside make_filter() below where needed for
+// UKF's S=chol(P) to stay well-defined) but is never measured here and
+// (per F's exact block-diagonal structure, math.md §7.3) cannot influence
+// the orbital NEES being validated, so the Phase 1 chi²(6) bounds/result
+// still apply unchanged. Position/measurement default to the filters'
+// own constructor-set H (already position-shaped at the correct Off for
+// both the old 6-state and new 12-state filters), so this test still
+// never sets H explicitly, same as before.
+template <typename Filter, int Off, typename MakeFilter>
 std::vector<double> run_mc_nees(int N, int n_steps, double dt,
                                  double sigma_gps,
                                  double q_pos, double q_vel,
@@ -72,9 +85,9 @@ std::vector<double> run_mc_nees(int N, int n_steps, double dt,
         x_true << k_r0, 0.0, 0.0, 0.0, v0, 0.0;
 
         Filter flt = make_filter();
-        // Draw initial filter state from P₀ around truth
-        flt.x << k_r0 + pos_ic(rng), pos_ic(rng), pos_ic(rng),
-                  vel_ic(rng), v0 + vel_ic(rng), vel_ic(rng);
+        // Draw initial filter state from P₀ around truth (orbital block only)
+        flt.x.template segment<3>(Off)     = Eigen::Vector3d(k_r0 + pos_ic(rng), pos_ic(rng), pos_ic(rng));
+        flt.x.template segment<3>(Off + 3) = Eigen::Vector3d(vel_ic(rng), v0 + vel_ic(rng), vel_ic(rng));
 
         for (int step = 0; step < n_steps; ++step) {
             // True trajectory: propagate, then inject process noise w ~ N(0, Q)
@@ -84,14 +97,19 @@ std::vector<double> run_mc_nees(int N, int n_steps, double dt,
 
             flt.predict(dt);
 
-            // ECI position measurement — consistent with H = [I₃ | 0₃]
+            // ECI position measurement — consistent with the filter's own
+            // constructor-default H (position-shaped at Off for both the
+            // 6-state and 12-state layouts).
             Eigen::Vector3d z = x_true.head<3>() +
                 Eigen::Vector3d(gps_noise(rng), gps_noise(rng), gps_noise(rng));
             flt.update(z);
 
-            // NEES = errᵀ P⁻¹ err ~ chi²(6) per run
-            const Eigen::Matrix<double, 6, 1> err = x_true - flt.x;
-            Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(flt.P);
+            // NEES = errᵀ P⁻¹ err ~ chi²(6) per run, orbital block only.
+            Eigen::Matrix<double, 6, 1> err;
+            err.template head<3>() = x_true.template head<3>() - flt.x.template segment<3>(Off);
+            err.template tail<3>() = x_true.template tail<3>() - flt.x.template segment<3>(Off + 3);
+            const Eigen::Matrix<double, 6, 6> P_orbit = flt.P.template block<6, 6>(Off, Off);
+            Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(P_orbit);
             if (llt.info() == Eigen::Success) {
                 nees_sum[step] += err.dot(llt.solve(err));
                 nees_cnt[step]++;
@@ -129,16 +147,16 @@ TEST(EKFConsistency, NEESWithinBounds) {
     constexpr double q_pos = 1.0;     // [m]   per-step position process noise
     constexpr double q_vel = 0.01;    // [m/s] per-step velocity process noise
 
-    const auto nees = run_mc_nees<ExtendedKalmanFilter>(
+    const auto nees = run_mc_nees<ExtendedKalmanFilter, 6>(
         100, 500, 10.0, 10.0, q_pos, q_vel,
         [=] {
             ExtendedKalmanFilter ekf;
             ekf.P.setZero();
-            for (int i = 0; i < 3; ++i) ekf.P(i, i) = 100.0 * 100.0;
-            for (int i = 3; i < 6; ++i) ekf.P(i, i) = 1.0;
+            for (int i = 6; i < 9; ++i) ekf.P(i, i) = 100.0 * 100.0;
+            for (int i = 9; i < 12; ++i) ekf.P(i, i) = 1.0;
             ekf.Q.setZero();
-            for (int i = 0; i < 3; ++i) ekf.Q(i, i) = q_pos * q_pos;
-            for (int i = 3; i < 6; ++i) ekf.Q(i, i) = q_vel * q_vel;
+            for (int i = 6; i < 9; ++i) ekf.Q(i, i) = q_pos * q_pos;
+            for (int i = 9; i < 12; ++i) ekf.Q(i, i) = q_vel * q_vel;
             ekf.R.setZero();
             for (int i = 0; i < 3; ++i) ekf.R(i, i) = 10.0 * 10.0;
             ekf.perturb_cfg.enable_j2   = false;
@@ -157,20 +175,29 @@ TEST(UKFConsistency, NEESWithinBounds) {
     constexpr double q_pos = 1.0;
     constexpr double q_vel = 0.01;
 
-    const auto nees = run_mc_nees<UnscentedKalmanFilter>(
+    const auto nees = run_mc_nees<UnscentedKalmanFilter, 6>(
         100, 500, 10.0, 10.0, q_pos, q_vel,
         [=] {
             UnscentedKalmanFilter ukf;
-            ukf.P.setZero();
-            for (int i = 0; i < 3; ++i) ukf.P(i, i) = 100.0 * 100.0;
-            for (int i = 3; i < 6; ++i) ukf.P(i, i) = 1.0;
+            // Attitude block (rows/cols 0-5) gets a placeholder identity P
+            // purely so S=chol(P) below stays well-defined — never measured
+            // in this orbital-only test; see run_mc_nees's doc comment.
+            ukf.P.setIdentity();
+            for (int i = 6; i < 9; ++i) ukf.P(i, i) = 100.0 * 100.0;
+            for (int i = 9; i < 12; ++i) ukf.P(i, i) = 1.0;
             {
-                Eigen::LLT<Eigen::Matrix<double, 6, 6>> llt(ukf.P);
+                Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt(ukf.P);
                 ukf.S = llt.matrixL();   // S = chol(P₀)
             }
+            // UKF::predict() Cholesky-factors the FULL Q every tick (SR-form
+            // process-noise injection) — a singular Q (attitude block left
+            // at exactly 0) corrupts the entire QR-based S reconstruction,
+            // not just that block. Tiny placeholder, irrelevant to the
+            // orbital NEES this test actually checks (see run_mc_nees's doc).
             ukf.Q.setZero();
-            for (int i = 0; i < 3; ++i) ukf.Q(i, i) = q_pos * q_pos;
-            for (int i = 3; i < 6; ++i) ukf.Q(i, i) = q_vel * q_vel;
+            ukf.Q.diagonal().setConstant(1e-12);
+            for (int i = 6; i < 9; ++i) ukf.Q(i, i) = q_pos * q_pos;
+            for (int i = 9; i < 12; ++i) ukf.Q(i, i) = q_vel * q_vel;
             ukf.R.setZero();
             for (int i = 0; i < 3; ++i) ukf.R(i, i) = 10.0 * 10.0;
             ukf.perturb_cfg.enable_j2   = false;
