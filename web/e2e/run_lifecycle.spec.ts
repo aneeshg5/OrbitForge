@@ -87,3 +87,22 @@ test('sim speed: default is fast enough to be meaningful, and the typed input cl
   // isn't a cosmetic UI cap, it's the boundary of the validated regime.
   await expect(numberInput).toHaveValue('5000')
 })
+
+test('run duration: auto-stops at the target and Continue does not immediately re-trigger it', async ({ page }) => {
+  await page.locator('.duration-number').fill('10')
+  await page.locator('.duration-unit').selectOption('60') // minutes -> 600s target
+
+  await page.getByRole('button', { name: '▶ Run' }).click()
+  // Auto-stop is a frame-loop check against T+, not an instant cutoff —
+  // poll rather than assume a fixed wait crosses the 600s target.
+  await expect.poll(() => readSimSeconds(page), { timeout: 10_000 }).toBeGreaterThanOrEqual(600)
+  await expect(page.getByRole('button', { name: '▶ Continue' })).toBeVisible()
+  const atAutoStop = await readSimSeconds(page)
+
+  // The actual regression this guards: simTime is still past the target
+  // on the very next frame after Continue, so without RunControls tracking
+  // lastAutoStopAtSec, checkAutoStop() would re-pause it instantly.
+  await page.getByRole('button', { name: '▶ Continue' }).click()
+  await expect(page.getByRole('button', { name: '⏸ Pause' })).toBeVisible()
+  await expect.poll(() => readSimSeconds(page), { timeout: 5000 }).toBeGreaterThan(atAutoStop)
+})

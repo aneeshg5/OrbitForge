@@ -6,6 +6,7 @@
 import { PRESETS, fetchTleByNorad } from '../data/tle_feed.js'
 import type { ScenarioConfig } from '../bridge/wasm_types.js'
 import { showToast } from './toast.js'
+import { makeInfoButton } from './info_button.js'
 
 export interface ScenarioEditorOptions {
   // Fired whenever whether getConfig() would currently succeed changes —
@@ -59,72 +60,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return e
 }
 
-const INFO_POPOVER_WIDTH = 200
-const INFO_POPOVER_MARGIN = 8 // min gap kept from the viewport edge when clamping
-
-// Small "(i)" button next to a label that toggles a plain-language
-// explanation on click — for parameters (Greek-letter symbols, jargon)
-// that aren't self-explanatory to someone who isn't already a GNC/filters
-// person. Click-to-toggle rather than a native title= tooltip since the
-// request was specifically for something a user can click, not just hover.
-//
-// Positioned via fixed coordinates computed in JS, not CSS-relative to the
-// trigger button — #controls (the sidebar) has overflow-y:auto, which per
-// the CSS spec also forces overflow-x to auto, so a plain position:absolute
-// popover gets silently clipped whenever its trigger isn't right at the
-// panel's edge (confirmed: this broke J2/Drag/SRP, which sit mid-row,
-// while GPS/sim speed happened to work only because their buttons are at
-// the row's far right). position:fixed escapes that clipping entirely;
-// clamping against window.innerWidth keeps it on-screen regardless of
-// where the trigger sits.
-// `example`, when given, is appended as a separate monospace block below
-// the prose — for showing the literal format of something (a TLE) rather
-// than just describing it in words.
-function makeInfoButton(explanation: string, opts?: { width?: number; example?: string }): HTMLElement {
-  const width = opts?.width ?? INFO_POPOVER_WIDTH
-  const wrapper = el('span', 'info-btn-wrapper')
-  const button = el('button', 'info-btn')
-  button.type = 'button'
-  button.textContent = 'i'
-  button.setAttribute('aria-label', 'More info')
-  const popover = el('div', 'info-popover')
-  popover.style.width = `${width}px`
-  const text = el('div')
-  text.textContent = explanation
-  popover.appendChild(text)
-  if (opts?.example) {
-    const pre = el('pre', 'info-popover-example')
-    pre.textContent = opts.example
-    popover.appendChild(pre)
-  }
-  popover.hidden = true
-  document.body.appendChild(popover)
-
-  function positionPopover(): void {
-    const rect = button.getBoundingClientRect()
-    const left = Math.min(
-      Math.max(rect.right - width, INFO_POPOVER_MARGIN),
-      window.innerWidth - width - INFO_POPOVER_MARGIN,
-    )
-    popover.style.top = `${rect.bottom + 6}px`
-    popover.style.left = `${left}px`
-  }
-
-  button.addEventListener('click', (e) => {
-    e.stopPropagation()
-    popover.hidden = !popover.hidden
-    if (!popover.hidden) positionPopover()
-  })
-  document.addEventListener('click', (e) => {
-    if (e.target !== button) popover.hidden = true
-  })
-  window.addEventListener('resize', () => {
-    if (!popover.hidden) positionPopover()
-  })
-  wrapper.append(button)
-  return wrapper
-}
-
 // Translates the bare "Nx" multiplier into a real-world-time statement —
 // sim_speed alone doesn't convey much (is 4320x fast? slow?) without
 // knowing it means "1 simulated day passes in 20 real seconds." Mirrors
@@ -137,6 +72,16 @@ function formatSimSpeedReadout(simSpeed: number): string {
   if (secPerSimDay >= 1) return `≈ 1 sim-day every ${secPerSimDay.toFixed(1)}s`
   return `≈ ${(simSpeed / 86400).toFixed(1)} sim-days per second`
 }
+
+// [seconds-per-unit, label] — the "Run for" duration input is entered in
+// whichever of these the user picks, then converted to seconds (matching
+// T+/simTime's own unit) for the actual comparison in RunControls.
+const DURATION_UNITS: readonly [number, string][] = [
+  [1, 's'],
+  [60, 'min'],
+  [3600, 'hr'],
+  [86400, 'day'],
+]
 
 export class ScenarioEditor {
   private readonly root: HTMLElement
@@ -157,6 +102,8 @@ export class ScenarioEditor {
   private readonly gpsSigmaInput: HTMLInputElement
   private readonly simSpeedInput: HTMLInputElement
   private readonly simSpeedReadout: HTMLSpanElement
+  private readonly durationInput: HTMLInputElement
+  private readonly durationUnit: HTMLSelectElement
   private readonly j2Checkbox: HTMLInputElement
   private readonly dragCheckbox: HTMLInputElement
   private readonly srpCheckbox: HTMLInputElement
@@ -277,6 +224,29 @@ export class ScenarioEditor {
     const speedReadoutRow = el('div', 'sim-speed-readout-row')
     speedReadoutRow.appendChild(this.simSpeedReadout)
 
+    const durationRow = el('div', 'row')
+    const durationLabel = el('label')
+    durationLabel.textContent = 'Run for: '
+    this.durationInput = el('input')
+    this.durationInput.type = 'number'
+    this.durationInput.className = 'duration-number'
+    this.durationInput.min = '0'
+    this.durationInput.step = '1'
+    this.durationInput.placeholder = '∞'
+    this.durationUnit = el('select')
+    this.durationUnit.className = 'duration-unit'
+    for (const [seconds, label] of DURATION_UNITS) {
+      const opt = el('option')
+      opt.value = String(seconds)
+      opt.textContent = label
+      this.durationUnit.appendChild(opt)
+    }
+    this.durationUnit.value = '86400' // days — matches the sim-day pacing the speed readout already talks in
+    const durationInfo = makeInfoButton(
+      'Automatically pauses once the simulated clock (T+) reaches this duration. Leave blank to run indefinitely.',
+    )
+    durationRow.append(durationLabel, this.durationInput, this.durationUnit, durationInfo)
+
     const j2Field = this.makeCheckbox(
       'J2',
       true,
@@ -301,7 +271,16 @@ export class ScenarioEditor {
 
     this.statusLine = el('div', 'status-line')
 
-    this.root.append(satelliteRow, this.tleSection, gpsRow, speedRow, speedReadoutRow, perturbRow, this.statusLine)
+    this.root.append(
+      satelliteRow,
+      this.tleSection,
+      gpsRow,
+      speedRow,
+      speedReadoutRow,
+      durationRow,
+      perturbRow,
+      this.statusLine,
+    )
     container.appendChild(this.root)
 
     this.satelliteSelect.addEventListener('change', () => {
@@ -414,6 +393,14 @@ export class ScenarioEditor {
     const line2 = lines.find((l) => l.startsWith('2 '))
     if (!line1 || !line2) return undefined
     return { line1, line2 }
+  }
+
+  // undefined means "run indefinitely" — the input is empty, zero, or
+  // otherwise not a usable positive number.
+  getRunDurationSec(): number | undefined {
+    const value = Number(this.durationInput.value)
+    if (!Number.isFinite(value) || value <= 0) return undefined
+    return value * Number(this.durationUnit.value)
   }
 
   // Returns the scenario config to launch with, or undefined (and reports

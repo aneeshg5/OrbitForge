@@ -379,7 +379,8 @@ function startRenderLoop(
   scene: Scene,
   camera: OrbitCamera,
   getRingReader: () => RingReader | undefined,
-): { resetView: () => void } {
+  getRunControls: () => RunControls | undefined,
+): { resetView: () => void; getCurrentSimTimeSec: () => number } {
   let latestFrame: StateFrame | undefined
 
   function clearView(): void {
@@ -406,11 +407,12 @@ function startRenderLoop(
     }
     camera.update()
     renderScene(scene, camera, latestFrame)
+    getRunControls()?.checkAutoStop(latestFrame ? latestFrame.simTime : 0)
     requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
 
-  return { resetView: clearView }
+  return { resetView: clearView, getCurrentSimTimeSec: () => (latestFrame ? latestFrame.simTime : 0) }
 }
 
 function registerServiceWorker(): void {
@@ -433,8 +435,13 @@ async function main(): Promise<void> {
   const scene = setupScene()
   const camera = new OrbitCamera(scene.canvas)
 
+  // runControls is constructed later (it needs scenarioEditor, see below) —
+  // referenced here only inside a closure invoked every render frame, by
+  // which point it's assigned. Mirrors the ringReader forward-reference
+  // pattern just below.
+  let runControls: RunControls | undefined
   let ringReader: RingReader | undefined
-  const { resetView } = startRenderLoop(scene, camera, () => ringReader)
+  const { resetView, getCurrentSimTimeSec } = startRenderLoop(scene, camera, () => ringReader, () => runControls)
 
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
   const postToWorker = (msg: WorkerRequest): void => {
@@ -456,7 +463,7 @@ async function main(): Promise<void> {
 
   const scenarioContainer = document.getElementById('scenario-editor-container')!
   const faultContainer = document.getElementById('fault-panel-container')!
-  new FaultPanel(faultContainer, { postToWorker })
+  new FaultPanel(faultContainer, { postToWorker, getCurrentSimTimeSec })
 
   // RunControls.getConfig needs scenarioEditor and scenarioEditor's
   // availability callback needs runControls — constructed in this order
@@ -464,9 +471,13 @@ async function main(): Promise<void> {
   // invoked later on click) to break the cycle without a null check.
   let scenarioEditor: ScenarioEditor
   const runControlsContainer = document.getElementById('run-controls-container')!
-  const runControls = new RunControls(runControlsContainer, { postToWorker, getConfig: () => scenarioEditor.getConfig() })
+  runControls = new RunControls(runControlsContainer, {
+    postToWorker,
+    getConfig: () => scenarioEditor.getConfig(),
+    getRunDurationSec: () => scenarioEditor.getRunDurationSec(),
+  })
   scenarioEditor = new ScenarioEditor(scenarioContainer, {
-    onAvailabilityChange: (available) => runControls.setRunEnabled(available),
+    onAvailabilityChange: (available) => runControls!.setRunEnabled(available),
   })
 }
 

@@ -252,6 +252,7 @@
        the sidebar's right edge instead of wrapping/eliding within it. */
     .scenario-editor .row select { flex: 1 1 auto; min-width: 0; }
     .fault-panel { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
+    .fault-row { display: inline-flex; align-items: center; gap: 4px; }
 
     button {
       font-family: var(--font-ui);
@@ -310,6 +311,24 @@
       flex: 0 0 auto;
     }
     .gps-sigma-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+    /* "Run for" duration: number + unit select, empty input = unlimited. */
+    .duration-number {
+      width: 56px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      flex: 0 0 auto;
+    }
+    .duration-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+    /* Overrides ".scenario-editor .row select"'s flex:1 1 auto (meant for
+       the satellite picker) — this select is a few characters, not a
+       dropdown that should claim the row's remaining width. */
+    .scenario-editor .row select.duration-unit { flex: 0 0 auto; min-width: 0; padding: 4px 6px; font-size: 12px; }
 
     /* "≈ 1 sim-day every Ns" caption under the Sim speed row (scenario_editor.ts's
        formatSimSpeedReadout) — a plain row's label gutter doesn't apply here, so

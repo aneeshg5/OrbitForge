@@ -185,6 +185,7 @@ void Simulation::step(double dt) {
     auto reported_fault = faults::FaultType::none;
     bool gps_dropout_active = false;
     double gps_spike_offset = 0.0;
+    double gps_bias_offset = 0.0;
     bool apply_maneuver_now = false;
 
     if (active_fault_.type != faults::FaultType::none && t_now >= active_fault_.onset_t) {
@@ -219,11 +220,17 @@ void Simulation::step(double dt) {
                 break;
             }
             case faults::FaultType::sensor_bias: {
-                // No observable effect yet: the filters are GPS-position-only
-                // and don't fuse IMU measurements. The fault is still
-                // tracked/reported here so the UI can show it queued.
+                // Persistent GPS measurement bias (meters, X-axis ECEF) —
+                // distinct from gps_spike (single bad reading) and
+                // gps_dropout (no signal): a constant calibration-style
+                // offset added to every GPS reading from onset onward.
+                // Originally targeted IMU accelerometer bias, but no
+                // filter here fuses IMU measurements (GPS-position-only),
+                // so that would have had no observable effect — repointed
+                // at the one sensor the filters actually consume.
                 const bool persists = (active_fault_.duration <= 0.0) ||
                     (t_now < active_fault_.onset_t + active_fault_.duration);
+                gps_bias_offset = persists ? active_fault_.magnitude : 0.0;
                 if (persists) reported_fault = faults::FaultType::sensor_bias;
                 break;
             }
@@ -281,6 +288,9 @@ void Simulation::step(double dt) {
         Eigen::Vector3d z = gps_.measure(x_true_.head<3>(), jd_now);
         if (gps_spike_offset != 0.0) {
             z += Eigen::Vector3d(gps_spike_offset, 0.0, 0.0);
+        }
+        if (gps_bias_offset != 0.0) {
+            z += Eigen::Vector3d(gps_bias_offset, 0.0, 0.0);
         }
 
         Eigen::Matrix<double, 3, 6> H_kf;

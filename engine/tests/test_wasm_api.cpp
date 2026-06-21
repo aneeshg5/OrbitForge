@@ -214,6 +214,72 @@ TEST(Simulation, ManeuverFaultChangesTrueVelocityOnce) {
     EXPECT_EQ(after.active_fault, static_cast<uint8_t>(FaultType::maneuver));
 }
 
+// sensor_bias adds a persistent (not one-shot, unlike gps_spike) offset to
+// every GPS reading while active. Verified by comparing two identically-
+// seeded runs (same RNG draws, so the only difference is the bias itself)
+// rather than asserting an absolute NIS threshold — the filters' steady-
+// state covariance (and therefore "how surprised" a given offset makes
+// them) isn't the same across KF/EKF/UKF, so a relative before/after
+// comparison of the actual estimate is the robust way to prove the
+// mechanism without depending on those convergence dynamics.
+TEST(Simulation, SensorBiasFaultShiftsPositionEstimateThenClears) {
+    constexpr int kWarmupSteps = 30;
+    constexpr double kBiasMeters = 300.0;
+    constexpr int kFaultDurationSec = 10;
+
+    Simulation baseline;
+    baseline.init_scenario(iss_like_cfg());
+    for (int i = 0; i < kWarmupSteps + kFaultDurationSec; ++i) baseline.step(1.0);
+    StateFrame base_frame;
+    while (baseline.ring_buffer().pop(base_frame)) {
+        // drain to the last frame
+    }
+
+    Simulation biased;
+    biased.init_scenario(iss_like_cfg());
+    for (int i = 0; i < kWarmupSteps; ++i) biased.step(1.0);
+    StateFrame warm;
+    while (biased.ring_buffer().pop(warm)) {
+        // drain to the last warm-up frame
+    }
+    EXPECT_EQ(warm.active_fault, static_cast<uint8_t>(FaultType::none));
+
+    FaultConfig fault;
+    fault.type = FaultType::sensor_bias;
+    fault.onset_t = static_cast<double>(kWarmupSteps);
+    fault.duration = static_cast<double>(kFaultDurationSec);
+    fault.magnitude = kBiasMeters;
+    biased.set_fault(fault);
+
+    // The Kalman gain on any single tick here is small (this filter has
+    // converged tight enough that one noisy/biased reading barely moves
+    // it), so the bias's effect compounds over the whole window rather
+    // than showing up on the very first tick — step through all of it
+    // before comparing.
+    StateFrame current;
+    for (int i = 0; i < kFaultDurationSec; ++i) {
+        biased.step(1.0);
+        ASSERT_TRUE(biased.ring_buffer().pop(current));
+        EXPECT_EQ(current.active_fault, static_cast<uint8_t>(FaultType::sensor_bias));
+    }
+
+    // Same seed, same true trajectory, same noise draws throughout — any
+    // difference in the estimated X position is attributable to the
+    // persistent bias alone, comfortably outside ordinary 10m-sigma GPS
+    // scatter.
+    EXPECT_GT(std::abs(current.kf_pos[0] - base_frame.kf_pos[0]), 20.0);
+    EXPECT_GT(std::abs(current.ekf_pos[0] - base_frame.ekf_pos[0]), 20.0);
+    EXPECT_GT(std::abs(current.ukf_pos[0] - base_frame.ukf_pos[0]), 20.0);
+
+    // Step past the window — bias clears.
+    for (int i = 0; i < 5; ++i) biased.step(1.0);
+    StateFrame last;
+    while (biased.ring_buffer().pop(last)) {
+        // drain to the last frame
+    }
+    EXPECT_EQ(last.active_fault, static_cast<uint8_t>(FaultType::none));
+}
+
 // Exercises the literal exported free-function surface (the global-singleton
 // layer EMSCRIPTEN_BINDINGS wraps), as opposed to the
 // Simulation class directly used by every test above.
