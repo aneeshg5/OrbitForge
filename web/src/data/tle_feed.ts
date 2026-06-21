@@ -9,14 +9,14 @@ export interface SatellitePreset {
 }
 
 export const PRESETS: SatellitePreset[] = [
-  { name: 'ISS (ZARYA)',       noradId: 25544, category: 'Station',  whyInteresting: '408 km, 51.6° incl., high drag, fastest NEES demo' },
-  { name: 'STARLINK-1008',     noradId: 44714, category: 'Starlink', whyInteresting: '550 km, 53°, high A/m, drag dominates' },
-  // GPS BIIR-2 (NORAD 26360) stopped publishing GP data (decommissioned) —
+  { name: 'ISS (ZARYA)',       noradId: 25544, category: 'Station',  whyInteresting: '408 km altitude, 51.6° inclination, high drag, fastest consistency demo' },
+  { name: 'STARLINK-1008',     noradId: 44714, category: 'Starlink', whyInteresting: '550 km altitude, 53° inclination, high area to mass, drag dominated' },
+  // GPS BIIR-2 (NORAD 26360) stopped publishing GP data (decommissioned),
   // swapped for BIIR-5, same generation/orbit class, currently active.
   // Same kind of swap as STARLINK-1007 -> -1008 earlier (see checkpoint.md).
-  { name: 'GPS BIIR-5',        noradId: 26407, category: 'GPS',      whyInteresting: '20,200 km, medium perturbations, position accuracy demo' },
-  { name: 'GOES-16',           noradId: 41866, category: 'Weather',  whyInteresting: '35,786 km GEO, SRP dominates, low filter update rate' },
-  { name: 'COSMOS 2251 DEB',   noradId: 33791, category: 'Debris',   whyInteresting: 'High-eccentricity debris — filter divergence demo' },
+  { name: 'GPS BIIR-5',        noradId: 26407, category: 'GPS',      whyInteresting: '20,200 km altitude, medium perturbations, position accuracy demo' },
+  { name: 'GOES-16',           noradId: 41866, category: 'Weather',  whyInteresting: '35,786 km altitude (geostationary), sunlight pressure dominates, slow updates' },
+  { name: 'COSMOS 2251 DEB',   noradId: 33791, category: 'Debris',   whyInteresting: 'High eccentricity debris orbit, shows filter divergence' },
 ]
 
 // Last-known-good TLEs for each preset, used when the live CelesTrak fetch

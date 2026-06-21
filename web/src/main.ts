@@ -385,6 +385,7 @@ function startRenderLoop(
   function clearView(): void {
     latestFrame = undefined
     scene.orbits.clear()
+    scene.panels.clear()
   }
 
   function tick(): void {

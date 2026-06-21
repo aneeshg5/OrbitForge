@@ -285,6 +285,16 @@ export class PanelManager {
     for (const panel of this.panels) this.renderPanel(panel)
   }
 
+  /** Drops all buffered history (e.g. on Reset) — the next render() call shows empty charts. */
+  clear(): void {
+    this.times.length = 0
+    for (const buf of this.series.values()) {
+      buf.kf.length = 0
+      buf.ekf.length = 0
+      buf.ukf.length = 0
+    }
+  }
+
   private renderPanel(panel: Panel): void {
     const labels = this.times.map((t) => t.toFixed(0))
     const buf = this.series.get(panel.metricKey)!

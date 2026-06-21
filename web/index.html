@@ -297,6 +297,83 @@
     }
     .sim-speed-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
+    /* GPS sigma's numeric input — no slider (request: typed value only). */
+    .gps-sigma-number {
+      width: 56px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      flex: 0 0 auto;
+    }
+    .gps-sigma-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
+    /* "≈ 1 sim-day every Ns" caption under the Sim speed row (scenario_editor.ts's
+       formatSimSpeedReadout) — a plain row's label gutter doesn't apply here, so
+       its own minimal rule instead of reusing .scenario-editor .row. */
+    .sim-speed-readout-row { padding-left: 0; margin-top: -2px; }
+    .sim-speed-readout { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+
+    /* Click-to-toggle "what does this mean" button for jargon/symbol
+       labels (scenario_editor.ts's makeInfoButton) — not a native title=
+       tooltip since the ask was specifically for something clickable. */
+    .info-btn-wrapper { display: inline-flex; flex: 0 0 auto; }
+    .info-btn {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: transparent;
+      border: 1px solid var(--border-strong);
+      color: var(--text-faint);
+      font-size: 10px;
+      font-style: italic;
+      font-family: Georgia, 'Times New Roman', serif;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      transform: none;
+    }
+    .info-btn:hover, .info-btn:focus-visible { color: var(--text); border-color: var(--accent-primary); }
+    .info-popover {
+      position: fixed;
+      z-index: 1000;
+      width: 200px;
+      padding: 8px 10px;
+      font-size: 11px;
+      line-height: 1.45;
+      font-family: var(--font-ui);
+      background: var(--surface-2);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      color: var(--text-muted);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+    }
+    .info-popover-example {
+      margin: 8px 0 0;
+      padding: 6px 8px;
+      font-family: var(--font-mono);
+      font-size: 9.5px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    /* Paste-TLE textarea: the info button sits inside its own top-right
+       corner instead of a separate label row above it. */
+    .tle-section { position: relative; }
+    .tle-section textarea { width: 225px; padding-right: 26px; }
+    .tle-info-overlay { position: absolute; top: 6px; right: 6px; }
+
     input[type='range'] {
       -webkit-appearance: none;
       appearance: none;
@@ -324,6 +401,26 @@
       border-radius: 50%;
       background: var(--accent-primary);
       border: none;
+    }
+
+    /* J2/Drag/SRP: label + info button as siblings, not nested (see
+       makeCheckbox's comment for why) — this wrapper keeps each pair
+       visually together while .row's own gap separates the three fields. */
+    /* Fixed equal width per field (sized for "Drag", the longest label) so
+       J2/Drag/SRP form even columns — the row's gap alone is already a
+       uniform 8px between fields, but letting each field's width track its
+       own label text made the columns themselves uneven widths, which
+       reads as uneven spacing even though the literal gap wasn't. */
+    .checkbox-field { display: inline-flex; align-items: center; gap: 6px; width: 76px; }
+
+    /* Theme native checkboxes to the app's accent color without rebuilding
+       them as custom elements — accent-color recolors the checked state,
+       color-scheme fixes the unchecked box from rendering as a stray
+       light-theme square against this dark UI. Same native size/behavior/
+       accessibility, just themed. */
+    input[type='checkbox'] {
+      accent-color: var(--accent-primary);
+      color-scheme: dark;
     }
 
     .scenario-editor label:has(input[type='checkbox']) {

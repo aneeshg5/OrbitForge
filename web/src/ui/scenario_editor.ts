@@ -59,6 +59,85 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return e
 }
 
+const INFO_POPOVER_WIDTH = 200
+const INFO_POPOVER_MARGIN = 8 // min gap kept from the viewport edge when clamping
+
+// Small "(i)" button next to a label that toggles a plain-language
+// explanation on click — for parameters (Greek-letter symbols, jargon)
+// that aren't self-explanatory to someone who isn't already a GNC/filters
+// person. Click-to-toggle rather than a native title= tooltip since the
+// request was specifically for something a user can click, not just hover.
+//
+// Positioned via fixed coordinates computed in JS, not CSS-relative to the
+// trigger button — #controls (the sidebar) has overflow-y:auto, which per
+// the CSS spec also forces overflow-x to auto, so a plain position:absolute
+// popover gets silently clipped whenever its trigger isn't right at the
+// panel's edge (confirmed: this broke J2/Drag/SRP, which sit mid-row,
+// while GPS/sim speed happened to work only because their buttons are at
+// the row's far right). position:fixed escapes that clipping entirely;
+// clamping against window.innerWidth keeps it on-screen regardless of
+// where the trigger sits.
+// `example`, when given, is appended as a separate monospace block below
+// the prose — for showing the literal format of something (a TLE) rather
+// than just describing it in words.
+function makeInfoButton(explanation: string, opts?: { width?: number; example?: string }): HTMLElement {
+  const width = opts?.width ?? INFO_POPOVER_WIDTH
+  const wrapper = el('span', 'info-btn-wrapper')
+  const button = el('button', 'info-btn')
+  button.type = 'button'
+  button.textContent = 'i'
+  button.setAttribute('aria-label', 'More info')
+  const popover = el('div', 'info-popover')
+  popover.style.width = `${width}px`
+  const text = el('div')
+  text.textContent = explanation
+  popover.appendChild(text)
+  if (opts?.example) {
+    const pre = el('pre', 'info-popover-example')
+    pre.textContent = opts.example
+    popover.appendChild(pre)
+  }
+  popover.hidden = true
+  document.body.appendChild(popover)
+
+  function positionPopover(): void {
+    const rect = button.getBoundingClientRect()
+    const left = Math.min(
+      Math.max(rect.right - width, INFO_POPOVER_MARGIN),
+      window.innerWidth - width - INFO_POPOVER_MARGIN,
+    )
+    popover.style.top = `${rect.bottom + 6}px`
+    popover.style.left = `${left}px`
+  }
+
+  button.addEventListener('click', (e) => {
+    e.stopPropagation()
+    popover.hidden = !popover.hidden
+    if (!popover.hidden) positionPopover()
+  })
+  document.addEventListener('click', (e) => {
+    if (e.target !== button) popover.hidden = true
+  })
+  window.addEventListener('resize', () => {
+    if (!popover.hidden) positionPopover()
+  })
+  wrapper.append(button)
+  return wrapper
+}
+
+// Translates the bare "Nx" multiplier into a real-world-time statement —
+// sim_speed alone doesn't convey much (is 4320x fast? slow?) without
+// knowing it means "1 simulated day passes in 20 real seconds." Mirrors
+// the same 86400s/sim-day relationship DEFAULTS.simSpeed's derivation
+// comment uses, just exposed live in the UI instead of only in a code
+// comment.
+function formatSimSpeedReadout(simSpeed: number): string {
+  if (!Number.isFinite(simSpeed) || simSpeed <= 0) return ''
+  const secPerSimDay = 86400 / simSpeed
+  if (secPerSimDay >= 1) return `≈ 1 sim-day every ${secPerSimDay.toFixed(1)}s`
+  return `≈ ${(simSpeed / 86400).toFixed(1)} sim-days per second`
+}
+
 export class ScenarioEditor {
   private readonly root: HTMLElement
   private currentTle: { line1: string; line2: string } | undefined
@@ -74,10 +153,10 @@ export class ScenarioEditor {
 
   private readonly satelliteSelect: HTMLSelectElement
   private readonly tleTextarea: HTMLTextAreaElement
+  private readonly tleSection: HTMLElement
   private readonly gpsSigmaInput: HTMLInputElement
-  private readonly gpsSigmaLabel: HTMLSpanElement
   private readonly simSpeedInput: HTMLInputElement
-  private readonly simSpeedNumberInput: HTMLInputElement
+  private readonly simSpeedReadout: HTMLSpanElement
   private readonly j2Checkbox: HTMLInputElement
   private readonly dragCheckbox: HTMLInputElement
   private readonly srpCheckbox: HTMLInputElement
@@ -103,94 +182,126 @@ export class ScenarioEditor {
     for (const preset of PRESETS) {
       const opt = el('option')
       opt.value = String(preset.noradId)
-      opt.textContent = `${preset.name} — ${preset.whyInteresting}`
+      opt.textContent = `${preset.name}: ${preset.whyInteresting}`
       this.satelliteSelect.appendChild(opt)
     }
-    satelliteRow.append(satelliteLabel, this.satelliteSelect)
+    const satelliteInfo = makeInfoButton('Each preset lists its altitude, inclination, and dominant perturbation.')
+    satelliteRow.append(satelliteLabel, this.satelliteSelect, satelliteInfo)
 
-    this.tleTextarea = el('textarea')
-    this.tleTextarea.placeholder = 'Paste a 2-line TLE here if not selecting a preset above'
-    this.tleTextarea.rows = 2
     // Only relevant when "(paste TLE below)" is selected — hidden the rest
-    // of the time so the panel isn't cluttered with an inert text box
-    // while a preset satellite is active.
-    this.tleTextarea.style.display = 'none'
+    // of the time so the panel isn't cluttered with an inert text box while
+    // a preset satellite is active. The info button sits inside the
+    // textarea's own corner rather than a separate label row above it,
+    // there's nothing else to label it needs ("TLE" is already implied by
+    // the dropdown option that reveals this).
+    this.tleSection = el('div', 'tle-section')
+    this.tleTextarea = el('textarea')
+    this.tleTextarea.placeholder = 'Paste TLE (2 lines)'
+    this.tleTextarea.rows = 2
+    const tleInfo = makeInfoButton(
+      'Two lines from NORAD or CelesTrak, line 1 starting with "1 " and line 2 with "2 ".',
+      {
+        width: 360,
+        example: '1 25544U 98067A   26171.41461525  .00008813  00000+0  16600-3 0  9990\n' +
+                  '2 25544  51.6327 284.1189 0004557 208.5194 151.5545 15.49333088572250',
+      },
+    )
+    tleInfo.classList.add('tle-info-overlay')
+    this.tleSection.append(this.tleTextarea, tleInfo)
+    this.tleSection.style.display = 'none'
 
     const gpsRow = el('div', 'row')
     const gpsLabel = el('label')
-    gpsLabel.textContent = 'GPS σ: '
+    gpsLabel.textContent = 'GPS (σ): '
     this.gpsSigmaInput = el('input')
-    this.gpsSigmaInput.type = 'range'
-    this.gpsSigmaInput.min = '1'
-    this.gpsSigmaInput.max = '100'
+    this.gpsSigmaInput.type = 'number'
+    this.gpsSigmaInput.className = 'gps-sigma-number'
+    this.gpsSigmaInput.min = '0'
+    this.gpsSigmaInput.step = '0.1'
     this.gpsSigmaInput.value = String(DEFAULTS.gpsSigma)
-    this.gpsSigmaLabel = el('span')
-    this.gpsSigmaLabel.textContent = `${DEFAULTS.gpsSigma} m`
     this.gpsSigmaInput.addEventListener('input', () => {
-      this.gpsSigmaLabel.textContent = `${this.gpsSigmaInput.value} m`
+      const value = Number(this.gpsSigmaInput.value)
+      if (!Number.isFinite(value) || value < 0) this.gpsSigmaInput.value = '0'
     })
-    gpsRow.append(gpsLabel, this.gpsSigmaInput, this.gpsSigmaLabel)
+    const gpsUnit = el('span')
+    gpsUnit.textContent = 'm'
+    const gpsInfo = makeInfoButton(
+      'σ (sigma) = standard deviation of random GPS measurement noise, in meters. ' +
+      'Higher values for a noisier sensor yharder to track.',
+    )
+    gpsRow.append(gpsLabel, this.gpsSigmaInput, gpsUnit, gpsInfo)
 
     const speedRow = el('div', 'row')
     const speedLabel = el('label')
     speedLabel.textContent = 'Sim speed: '
-    // Range covers the common 0.1x-100x sweep with a quick drag gesture;
-    // the paired number input (synced to the same value) accepts anything
-    // up to SIM_SPEED_MAX for users who want a precise or larger value the
-    // slider's range can't reach.
+    // No slider (matches GPS σ) — a slider's fixed range can't usefully
+    // cover both "slow enough to watch a single pass closely" and "fast
+    // enough to see a day pass," so it's a typed value only, capped at
+    // SIM_SPEED_MAX.
     this.simSpeedInput = el('input')
-    this.simSpeedInput.type = 'range'
+    this.simSpeedInput.type = 'number'
+    this.simSpeedInput.className = 'sim-speed-number'
     this.simSpeedInput.min = '0.1'
-    this.simSpeedInput.max = '100'
+    this.simSpeedInput.max = String(SIM_SPEED_MAX)
     this.simSpeedInput.step = '0.1'
     this.simSpeedInput.value = String(DEFAULTS.simSpeed)
-    this.simSpeedNumberInput = el('input')
-    this.simSpeedNumberInput.type = 'number'
-    this.simSpeedNumberInput.className = 'sim-speed-number'
-    this.simSpeedNumberInput.min = '0.1'
-    this.simSpeedNumberInput.max = String(SIM_SPEED_MAX)
-    this.simSpeedNumberInput.step = '0.1'
-    this.simSpeedNumberInput.value = String(DEFAULTS.simSpeed)
     const speedUnit = el('span')
     speedUnit.textContent = 'x'
+    this.simSpeedReadout = el('span', 'sim-speed-readout')
+    this.simSpeedReadout.textContent = formatSimSpeedReadout(DEFAULTS.simSpeed)
+    const speedInfo = makeInfoButton(
+      'Sim speed controls how fast simulated time advances per real second. ' +
+      'It also sets the physics step size directly, so very large values trade ' +
+      'accuracy for speed.',
+    )
 
     this.simSpeedInput.addEventListener('input', () => {
-      this.simSpeedNumberInput.value = this.simSpeedInput.value
+      const value = Number(this.simSpeedInput.value)
+      if (!Number.isFinite(value) || value <= 0) {
+        this.simSpeedReadout.textContent = ''
+        return
+      }
+      this.simSpeedReadout.textContent = formatSimSpeedReadout(Math.min(value, SIM_SPEED_MAX))
     })
-    this.simSpeedNumberInput.addEventListener('input', () => {
-      const value = Number(this.simSpeedNumberInput.value)
-      if (!Number.isFinite(value) || value <= 0) return
-      const clamped = Math.min(value, SIM_SPEED_MAX)
-      // Only mirror onto the slider when it's within the slider's own
-      // narrower range — typing e.g. 2000 should leave the slider pinned
-      // at its max rather than silently snapping the typed value down.
-      if (clamped >= 0.1 && clamped <= 100) this.simSpeedInput.value = String(clamped)
-    })
-    this.simSpeedNumberInput.addEventListener('change', () => {
-      const value = Number(this.simSpeedNumberInput.value)
+    this.simSpeedInput.addEventListener('change', () => {
+      const value = Number(this.simSpeedInput.value)
       const clamped = !Number.isFinite(value) || value <= 0 ? DEFAULTS.simSpeed : Math.min(value, SIM_SPEED_MAX)
       // Snap to the 0.1 step on commit (blur/enter), not on every
       // keystroke — rounding mid-type would fight whatever the user is
       // currently typing (e.g. "3." while reaching for "3.5").
       const rounded = Math.round(clamped * 10) / 10
-      this.simSpeedNumberInput.value = String(rounded)
-      if (rounded <= 100) this.simSpeedInput.value = String(Math.max(rounded, 0.1))
+      this.simSpeedInput.value = String(rounded)
+      this.simSpeedReadout.textContent = formatSimSpeedReadout(rounded)
     })
-    speedRow.append(speedLabel, this.simSpeedInput, this.simSpeedNumberInput, speedUnit)
+    speedRow.append(speedLabel, this.simSpeedInput, speedUnit, speedInfo)
+    const speedReadoutRow = el('div', 'sim-speed-readout-row')
+    speedReadoutRow.appendChild(this.simSpeedReadout)
 
-    const j2Field = this.makeCheckbox('J2', true)
-    const dragField = this.makeCheckbox('Drag', true)
-    const srpField = this.makeCheckbox('SRP', false)
+    const j2Field = this.makeCheckbox(
+      'J2',
+      true,
+      'Earth’s equatorial bulge. The dominant orbit perturbation for satellites in low orbit.',
+    )
+    const dragField = this.makeCheckbox(
+      'Drag',
+      true,
+      'Atmospheric drag. Slowly lowers the orbit; strongest below ~600 km.',
+    )
+    const srpField = this.makeCheckbox(
+      'SRP',
+      false,
+      'Solar radiation pressure. Push from sunlight; matters most above ~800 km.',
+    )
     this.j2Checkbox = j2Field.checkbox
     this.dragCheckbox = dragField.checkbox
     this.srpCheckbox = srpField.checkbox
 
     const perturbRow = el('div', 'row')
-    perturbRow.append(j2Field.label, dragField.label, srpField.label)
+    perturbRow.append(j2Field.field, dragField.field, srpField.field)
 
     this.statusLine = el('div', 'status-line')
 
-    this.root.append(satelliteRow, this.tleTextarea, gpsRow, speedRow, perturbRow, this.statusLine)
+    this.root.append(satelliteRow, this.tleSection, gpsRow, speedRow, speedReadoutRow, perturbRow, this.statusLine)
     container.appendChild(this.root)
 
     this.satelliteSelect.addEventListener('change', () => {
@@ -219,13 +330,24 @@ export class ScenarioEditor {
     this.onAvailabilityChange(this.hasValidTle())
   }
 
-  private makeCheckbox(name: string, checked: boolean): { label: HTMLLabelElement; checkbox: HTMLInputElement } {
+  // The info button is a sibling of <label>, not a child of it — a click
+  // anywhere inside a <label> toggles its associated checkbox natively
+  // (that's how label/control association works, independent of JS event
+  // bubbling), so nesting the button inside would toggle J2/Drag/SRP every
+  // time someone just wanted to read the explanation.
+  private makeCheckbox(
+    name: string,
+    checked: boolean,
+    explanation: string,
+  ): { field: HTMLElement; checkbox: HTMLInputElement } {
     const label = el('label')
     const checkbox = el('input')
     checkbox.type = 'checkbox'
     checkbox.checked = checked
     label.append(checkbox, document.createTextNode(` ${name}`))
-    return { label, checkbox }
+    const field = el('span', 'checkbox-field')
+    field.append(label, makeInfoButton(explanation))
+    return { field, checkbox }
   }
 
   // Plain text status (or cleared) — also drops the loading spinner if one
@@ -248,7 +370,7 @@ export class ScenarioEditor {
   private async onSatelliteChange(): Promise<void> {
     const seq = ++this.requestSeq
     const value = this.satelliteSelect.value
-    this.tleTextarea.style.display = value === '__paste__' ? '' : 'none'
+    this.tleSection.style.display = value === '__paste__' ? '' : 'none'
 
     if (value === '__paste__') {
       this.currentTle = undefined
@@ -315,7 +437,7 @@ export class ScenarioEditor {
       areaToMass: DEFAULTS.areaToMass,
       qPos: DEFAULTS.qPos,
       qVel: DEFAULTS.qVel,
-      simSpeed: Number(this.simSpeedNumberInput.value),
+      simSpeed: Number(this.simSpeedInput.value),
       seed: -1,
       inertiaX: DEFAULTS.inertia,
       inertiaY: DEFAULTS.inertia,
