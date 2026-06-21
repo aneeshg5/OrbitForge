@@ -38,9 +38,11 @@ test('Run advances T+ and Pause freezes it', async ({ page }) => {
   await page.getByRole('button', { name: '▶ Run' }).click()
   await expect(page.getByRole('button', { name: '⏸ Pause' })).toBeVisible()
 
-  await page.waitForTimeout(1000)
-  const whileRunning = await readSimSeconds(page)
-  expect(whileRunning).toBeGreaterThan(0)
+  // Poll rather than a fixed wait-then-check: WASM compile/instantiate
+  // cold-start time varies a lot by environment (CI's first run is
+  // noticeably slower than a warm local dev server), so a fixed 1s wait
+  // was flaky in CI even though it was always plenty locally.
+  await expect.poll(() => readSimSeconds(page), { timeout: 10_000 }).toBeGreaterThan(0)
 
   await page.getByRole('button', { name: '⏸ Pause' }).click()
   const atPause = await readSimSeconds(page)
@@ -51,8 +53,7 @@ test('Run advances T+ and Pause freezes it', async ({ page }) => {
 
 test('Reset while running does not crash and clears T+ back to zero', async ({ page }) => {
   await page.getByRole('button', { name: '▶ Run' }).click()
-  await page.waitForTimeout(1000)
-  expect(await readSimSeconds(page)).toBeGreaterThan(0)
+  await expect.poll(() => readSimSeconds(page), { timeout: 10_000 }).toBeGreaterThan(0)
 
   // The actual regression this guards: resetting mid-run used to hard-crash
   // the tab (ring_reader.ts's readPos never resyncing after

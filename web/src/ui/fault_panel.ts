@@ -60,11 +60,11 @@ const FAULT_BUTTONS: FaultButtonSpec[] = [
     info: 'Permanently raises the true drag coefficient by 50%, starting now, for the rest of this run (not a brief event). The filters keep assuming the original value, so their estimate slowly drifts as the real orbit decays faster than expected.',
   },
   {
-    label: 'GPS Bias (+20m, 60s)',
+    label: 'GPS Bias (+150m, 60s)',
     type: FaultType.SensorBias,
     duration: 60,
-    magnitude: 20,
-    info: 'Adds a constant 20m offset to every GPS reading for 60 seconds starting now, then removes it. Unlike GPS Spike (one bad reading) or GPS Dropout (no signal), this is a steady miscalibration the filters partially absorb, then have to recover from once it clears.',
+    magnitude: 150,
+    info: 'Adds a constant 150m offset to every GPS reading for 60 seconds starting now, then removes it. Unlike GPS Spike (one bad reading) or GPS Dropout (no signal), this is a steady miscalibration the filters partially absorb, then have to recover from once it clears.',
   },
 ]
 
