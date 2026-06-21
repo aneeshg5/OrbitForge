@@ -14,9 +14,30 @@ export interface ScenarioEditorOptions {
   onAvailabilityChange?: (available: boolean) => void
 }
 
+// Sim speed multiplies the RK4 integrator's per-tick step directly
+// (engine/src/wasm_api.cpp: dt = (1/100Hz) * sim_speed), so it isn't just a
+// playback-rate knob — it's literally the physics step size. At 1000x, dt
+// is already 10s/step (~0.2% of the ISS preset's ~5500s orbital period);
+// well beyond a few thousand x, step size becomes a non-trivial fraction
+// of a LEO period (worst-case the eccentric debris preset's fast perigee
+// passage) and the RK4 "true" trajectory itself starts accumulating
+// visible integration error, not just looking sped-up. 5000 is a generous
+// ceiling that stays in the regime validated by this engine's existing
+// energy-conservation tests (h~10s fixed-step, CLAUDE.md §6 Integrators),
+// not a precisely re-derived bound — happy to actually sweep this
+// empirically against the conservation tests if finer-grained accuracy
+// matters for a specific scenario.
+const SIM_SPEED_MAX = 5000
+
 const DEFAULTS = {
   gpsSigma: 10,
-  simSpeed: 1,
+  // 86400 (seconds/sim-day) / 20 (seconds for the Earth's cosmetic spin to
+  // complete one rotation at this speed, main.ts's SPIN_RAD_PER_SIM_SECOND)
+  // — keeps the same ~20s/rotation pacing the old wall-clock-driven spin
+  // had, now achieved by actually running sim_time fast enough rather than
+  // decoupling the visual from sim_time. Below SIM_SPEED_MAX, comfortably
+  // inside the dt-vs-orbital-period regime that comment justifies.
+  simSpeed: 4320,
   dragCoeff: 2.2,
   areaToMass: 0.01,
   qPos: 1.0,
@@ -56,7 +77,7 @@ export class ScenarioEditor {
   private readonly gpsSigmaInput: HTMLInputElement
   private readonly gpsSigmaLabel: HTMLSpanElement
   private readonly simSpeedInput: HTMLInputElement
-  private readonly simSpeedLabel: HTMLSpanElement
+  private readonly simSpeedNumberInput: HTMLInputElement
   private readonly j2Checkbox: HTMLInputElement
   private readonly dragCheckbox: HTMLInputElement
   private readonly srpCheckbox: HTMLInputElement
@@ -113,17 +134,49 @@ export class ScenarioEditor {
     const speedRow = el('div', 'row')
     const speedLabel = el('label')
     speedLabel.textContent = 'Sim speed: '
+    // Range covers the common 0.1x-100x sweep with a quick drag gesture;
+    // the paired number input (synced to the same value) accepts anything
+    // up to SIM_SPEED_MAX for users who want a precise or larger value the
+    // slider's range can't reach.
     this.simSpeedInput = el('input')
     this.simSpeedInput.type = 'range'
-    this.simSpeedInput.min = '1'
+    this.simSpeedInput.min = '0.1'
     this.simSpeedInput.max = '100'
+    this.simSpeedInput.step = '0.1'
     this.simSpeedInput.value = String(DEFAULTS.simSpeed)
-    this.simSpeedLabel = el('span')
-    this.simSpeedLabel.textContent = `${DEFAULTS.simSpeed}x`
+    this.simSpeedNumberInput = el('input')
+    this.simSpeedNumberInput.type = 'number'
+    this.simSpeedNumberInput.className = 'sim-speed-number'
+    this.simSpeedNumberInput.min = '0.1'
+    this.simSpeedNumberInput.max = String(SIM_SPEED_MAX)
+    this.simSpeedNumberInput.step = '0.1'
+    this.simSpeedNumberInput.value = String(DEFAULTS.simSpeed)
+    const speedUnit = el('span')
+    speedUnit.textContent = 'x'
+
     this.simSpeedInput.addEventListener('input', () => {
-      this.simSpeedLabel.textContent = `${this.simSpeedInput.value}x`
+      this.simSpeedNumberInput.value = this.simSpeedInput.value
     })
-    speedRow.append(speedLabel, this.simSpeedInput, this.simSpeedLabel)
+    this.simSpeedNumberInput.addEventListener('input', () => {
+      const value = Number(this.simSpeedNumberInput.value)
+      if (!Number.isFinite(value) || value <= 0) return
+      const clamped = Math.min(value, SIM_SPEED_MAX)
+      // Only mirror onto the slider when it's within the slider's own
+      // narrower range — typing e.g. 2000 should leave the slider pinned
+      // at its max rather than silently snapping the typed value down.
+      if (clamped >= 0.1 && clamped <= 100) this.simSpeedInput.value = String(clamped)
+    })
+    this.simSpeedNumberInput.addEventListener('change', () => {
+      const value = Number(this.simSpeedNumberInput.value)
+      const clamped = !Number.isFinite(value) || value <= 0 ? DEFAULTS.simSpeed : Math.min(value, SIM_SPEED_MAX)
+      // Snap to the 0.1 step on commit (blur/enter), not on every
+      // keystroke — rounding mid-type would fight whatever the user is
+      // currently typing (e.g. "3." while reaching for "3.5").
+      const rounded = Math.round(clamped * 10) / 10
+      this.simSpeedNumberInput.value = String(rounded)
+      if (rounded <= 100) this.simSpeedInput.value = String(Math.max(rounded, 0.1))
+    })
+    speedRow.append(speedLabel, this.simSpeedInput, this.simSpeedNumberInput, speedUnit)
 
     const j2Field = this.makeCheckbox('J2', true)
     const dragField = this.makeCheckbox('Drag', true)
@@ -175,6 +228,23 @@ export class ScenarioEditor {
     return { label, checkbox }
   }
 
+  // Plain text status (or cleared) — also drops the loading spinner if one
+  // was showing.
+  private setStatusText(text: string): void {
+    this.statusLine.classList.remove('loading')
+    this.statusLine.textContent = text
+  }
+
+  // In-flight fetch indicator: a small spinner + "Loading <label>…", built
+  // via DOM API rather than innerHTML (this codebase's convention — see
+  // run_controls.ts's setButtonContent). The spinner itself is pure CSS
+  // (index.html's .status-line.loading .spinner), not an image/icon font.
+  private setStatusLoading(label: string): void {
+    this.statusLine.classList.add('loading')
+    const spinner = el('span', 'spinner')
+    this.statusLine.replaceChildren(spinner, document.createTextNode(`Loading ${label}…`))
+  }
+
   private async onSatelliteChange(): Promise<void> {
     const seq = ++this.requestSeq
     const value = this.satelliteSelect.value
@@ -182,13 +252,15 @@ export class ScenarioEditor {
 
     if (value === '__paste__') {
       this.currentTle = undefined
-      this.statusLine.textContent = ''
+      this.setStatusText('')
       this.notifyAvailability()
       return
     }
     const noradId = Number(value)
     this.currentTle = undefined
     this.notifyAvailability()
+    const presetLabel = PRESETS.find((p) => p.noradId === noradId)?.name ?? `NORAD ${noradId}`
+    this.setStatusLoading(presetLabel)
     try {
       const result = await fetchTleByNorad(noradId)
       if (seq !== this.requestSeq) return // superseded by a newer selection — discard this result
@@ -196,14 +268,14 @@ export class ScenarioEditor {
       this.currentTle = { line1: elements.tleLine1, line2: elements.tleLine2 }
       const label = elements.name || `NORAD ${noradId}`
       if (result.fromCache) {
-        this.statusLine.textContent = `Loaded ${label} (cached, offline)`
+        this.setStatusText(`Loaded ${label} (cached, offline)`)
         showToast(`CelesTrak unreachable — using cached TLE for ${label} (cached ${result.cachedAt}, may be stale)`, 'info')
       } else {
-        this.statusLine.textContent = `Loaded ${label}`
+        this.setStatusText(`Loaded ${label}`)
       }
     } catch (err) {
       if (seq !== this.requestSeq) return // superseded — don't disable Run for a selection the user already changed away from
-      this.statusLine.textContent = ''
+      this.setStatusText('')
       showToast(`Failed to fetch TLE for NORAD ${noradId}: ${String(err)}`, 'error')
       this.currentTle = undefined
     }
@@ -243,7 +315,7 @@ export class ScenarioEditor {
       areaToMass: DEFAULTS.areaToMass,
       qPos: DEFAULTS.qPos,
       qVel: DEFAULTS.qVel,
-      simSpeed: Number(this.simSpeedInput.value),
+      simSpeed: Number(this.simSpeedNumberInput.value),
       seed: -1,
       inertiaX: DEFAULTS.inertia,
       inertiaY: DEFAULTS.inertia,

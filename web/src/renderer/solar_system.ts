@@ -280,10 +280,16 @@ void main() {
 // produces real, visible parallax against the Sun instead of it sitting
 // glued to the sky.
 const SUN_ORBIT_RADIUS = 22.0
-// Slower than the Moon's 30s orbit — keeps the real relative ordering
-// (a "year" is much longer than a "month") even though both are
-// compressed to a watchable loop.
-const SUN_ORBIT_PERIOD_SEC = 90.0
+// Real Julian year (365.25 days) — driven by simulated elapsed time, not
+// wall-clock (see sunDirectionScene's param and main.ts's call site), so
+// Sun/Moon position is physically consistent with the sim's own clock
+// instead of an arbitrary cosmetic loop. Earlier versions used a fast
+// 90s/30s wall-clock loop so the orbit was watchable in real time, but
+// that had no relation to the simulated time elapsed and read as
+// inconsistent once the UI started showing elapsed sim time too — at
+// typical sim durations (seconds to hours), the Sun's actual annual
+// motion is correctly almost imperceptible, same as in reality.
+const SUN_ORBIT_PERIOD_SEC = 365.25 * 86400
 // Arbitrary starting angle, offset from the Moon's (see MOON_PHASE0)
 // just to avoid the two starting collinear.
 const SUN_PHASE0 = 1.4
@@ -315,8 +321,12 @@ const SUN_GLOW_OUTER_ALPHA = 0.28
 // flat gray sphere has no surface marking to show it.
 const MOON_ORBIT_RADIUS = 14.0
 const MOON_MESH_RADIUS = 0.27
-const MOON_ORBIT_PERIOD_SEC = 30.0
-const MOON_SPIN_PERIOD_SEC = 30.0
+// Real sidereal period (27.321661 days), driven by simulated elapsed time —
+// see SUN_ORBIT_PERIOD_SEC's comment above for why. Spin matches orbit
+// period (tidal lock) for the same reason it always did; both are now real
+// rather than stylized.
+const MOON_ORBIT_PERIOD_SEC = 27.321661 * 86400
+const MOON_SPIN_PERIOD_SEC = 27.321661 * 86400
 const MOON_TILT_DEG = 6.7
 const MOON_COLOR: readonly [number, number, number] = [0.65, 0.65, 0.63]
 const MOON_PHASE0 = 5.5
@@ -338,13 +348,15 @@ function orbitScenePos(center: readonly [number, number, number], thetaRad: numb
 }
 
 /**
- * Current Sun direction (Earth -> Sun, unit vector, scene axes), driven
- * by wall-clock time. Feeds both this module's own Sun position and
- * Earth's day/night terminator (see main.ts) — keeping the visible Sun
- * and the lit hemisphere always in sync as it orbits.
+ * Current Sun direction (Earth -> Sun, unit vector, scene axes), driven by
+ * SIMULATED elapsed time (StateFrame.simTime, seconds — 0 if no sim has
+ * run yet), not wall-clock — see SUN_ORBIT_PERIOD_SEC's comment. Feeds
+ * both this module's own Sun position and Earth's day/night terminator
+ * (see main.ts) — keeping the visible Sun and the lit hemisphere always
+ * in sync as it orbits.
  */
-export function sunDirectionScene(tSec: number): [number, number, number] {
-  const theta = SUN_PHASE0 + (2 * Math.PI * tSec) / SUN_ORBIT_PERIOD_SEC
+export function sunDirectionScene(simTimeSec: number): [number, number, number] {
+  const theta = SUN_PHASE0 + (2 * Math.PI * simTimeSec) / SUN_ORBIT_PERIOD_SEC
   return eciToScene(eclipticDirection(theta))
 }
 
@@ -441,10 +453,19 @@ export class SolarSystemRenderer {
    * objects orbiting Earth — ordinary (non-stripped) view matrix, real
    * depth test, so they correctly parallax/occlude against Earth and
    * each other regardless of draw order. sunDirScene should be
-   * sunDirectionScene(tSec) — passed in rather than recomputed so the
-   * caller can feed the identical direction to Earth's lighting.
+   * sunDirectionScene(simTimeSec) — passed in rather than recomputed so
+   * the caller can feed the identical direction to Earth's lighting.
+   *
+   * Two separate time inputs, deliberately not the same value: tSecAnim
+   * is wall-clock seconds, driving only the cosmetic shader animations
+   * (the Sun surface's "boiling" turbulence, the corona's wispy edge) —
+   * these have no real-world rate to be physically tied to, so they keep
+   * animating continuously even while the sim is paused, same as Earth's
+   * cosmetic spin (main.ts). simTimeSec is the sim's own elapsed time,
+   * driving Sun/Moon ORBITAL position — see SUN_ORBIT_PERIOD_SEC's comment
+   * for why that one must be simulated time, not wall-clock.
    */
-  render(view: Mat4, proj: Mat4, sunDirScene: readonly [number, number, number], tSec: number): void {
+  render(view: Mat4, proj: Mat4, sunDirScene: readonly [number, number, number], tSecAnim: number, simTimeSec: number): void {
     const gl = this.gl
     gl.enable(gl.DEPTH_TEST)
 
@@ -462,7 +483,7 @@ export class SolarSystemRenderer {
     gl.uniformMatrix4fv(this.ssUModel, false, sunModel)
     gl.uniformMatrix4fv(this.ssUView, false, view)
     gl.uniformMatrix4fv(this.ssUProj, false, proj)
-    gl.uniform1f(this.ssUTime, tSec)
+    gl.uniform1f(this.ssUTime, tSecAnim)
     gl.drawElements(gl.TRIANGLES, this.sphereIndexCount, this.sphereIndexType, 0)
     gl.bindVertexArray(null)
 
@@ -473,9 +494,9 @@ export class SolarSystemRenderer {
     gl.uniformMatrix4fv(this.bUProj, false, proj)
     gl.uniform3f(this.bUSunDir, sunDirScene[0], sunDirScene[1], sunDirScene[2])
 
-    const moonTheta = MOON_PHASE0 + (2 * Math.PI * tSec) / MOON_ORBIT_PERIOD_SEC
+    const moonTheta = MOON_PHASE0 + (2 * Math.PI * simTimeSec) / MOON_ORBIT_PERIOD_SEC
     const moonPos = orbitScenePos([0, 0, 0], moonTheta, MOON_ORBIT_RADIUS)
-    const moonSpin = (2 * Math.PI * tSec) / MOON_SPIN_PERIOD_SEC
+    const moonSpin = (2 * Math.PI * simTimeSec) / MOON_SPIN_PERIOD_SEC
     const moonTilt = (MOON_TILT_DEG * Math.PI) / 180
     const moonModel = bodyModelMatrix(moonPos, moonTilt, moonSpin, MOON_MESH_RADIUS)
     gl.bindVertexArray(this.sphereVao)
@@ -499,7 +520,7 @@ export class SolarSystemRenderer {
     gl.uniformMatrix4fv(this.gUModel, false, glowModel)
     gl.uniformMatrix4fv(this.gUView, false, view)
     gl.uniformMatrix4fv(this.gUProj, false, proj)
-    gl.uniform1f(this.gUTime, tSec)
+    gl.uniform1f(this.gUTime, tSecAnim)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
     gl.disable(gl.DEPTH_TEST)

@@ -12,6 +12,10 @@ web/public/orbitforge.worker.js
 # Playwright MCP test artifacts (screenshots, console logs)
 .playwright-mcp/
 
+# Playwright e2e test runner artifacts (web/e2e/, web/playwright.config.ts are committed)
+web/test-results/
+web/playwright-report/
+
 # Emscripten cache
 .emscripten_cache/
 

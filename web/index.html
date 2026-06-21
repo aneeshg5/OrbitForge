@@ -54,6 +54,18 @@
       border-bottom: 1px solid var(--border);
       flex: 0 0 auto;
     }
+    /* Elapsed simulated time (not wall-clock) — lets the user tell when
+       to pause after simulating a given duration. Sourced from the
+       engine's own sim_time (StateFrame), so it reflects sim_speed
+       correctly (e.g. running at 10x shows simulated time advancing 10x
+       faster than the wall clock), not just time-since-Run-was-clicked. */
+    #sim-time-display {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text-muted);
+      letter-spacing: 0.02em;
+    }
+    #sim-time-display .label { color: var(--text-faint); margin-right: 4px; }
     #brand {
       font-weight: 600;
       font-size: 14px;
@@ -87,7 +99,60 @@
     .reset-btn:hover { background: rgba(239, 90, 111, 0.2); }
 
     #layout { display: flex; flex: 1 1 auto; min-height: 0; }
-    #scene-canvas { flex: 1 1 0%; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
+    /* Wraps just the canvas (not #controls too) so the attitude gizmo
+       legend below can be positioned relative to the globe view alone,
+       not the full #layout row (which would put "bottom-right" over the
+       scenario/fault sidebar instead). */
+    #scene-container { position: relative; flex: 1 1 0%; min-width: 0; display: flex; }
+    #scene-canvas { flex: 1 1 auto; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
+
+    /* Attitude gizmo (renderer/attitude.ts): a fixed corner orientation
+       indicator, not a 3D object at the spacecraft's world position (see
+       that file's module doc for why). No background/border — this div
+       is purely a geometry reference so main.ts knows where/how big to
+       draw the WebGL triad underneath (see its use of
+       getBoundingClientRect() on #attitude-gizmo-frame). */
+    #attitude-gizmo-frame {
+      position: absolute;
+      right: 12px;
+      bottom: 28px;
+      width: 64px;
+      height: 64px;
+      pointer-events: none;
+    }
+    /* Disambiguates this from a generic camera-relative "nav gizmo"
+       (Blender/Unity-style, rotates as you orbit) — this one is fixed
+       regardless of camera and only changes with the satellite's real
+       attitude, which is a meaningfully different thing to show and easy
+       to mistake for the other if unlabeled. Sits at the actual bottom
+       corner, below the gizmo itself (not above it). */
+    #attitude-gizmo-caption {
+      position: absolute;
+      right: 12px;
+      bottom: 12px;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--text-faint);
+      pointer-events: none;
+    }
+    /* X/Y/Z labels: repositioned every frame by main.ts to track each
+       rotating axis's actual on-screen tip (computed via
+       AttitudeGizmoRenderer.computeAxisTipsNdc()), not a static legend —
+       initial left/top here don't matter, JS sets them immediately. */
+    .axis-label {
+      position: absolute;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: 700;
+      pointer-events: none;
+      transform: translate(-50%, -50%);
+      text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 3px rgba(0, 0, 0, 0.9);
+    }
+    #axis-label-x { color: rgb(255, 64, 64); }
+    #axis-label-y { color: rgb(77, 242, 77); }
+    #axis-label-z { color: rgb(89, 140, 255); }
 
     /* Scenario editor + fault injection: moved into the narrow right
        sidebar (was the chart panels' spot) since these are low-density
@@ -217,6 +282,21 @@
     textarea { resize: vertical; font-family: var(--font-mono); }
     select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
+    /* Sim speed's typed-value input, paired with its range slider (see
+       scenario_editor.ts) — narrow since it's just a number, not a dropdown. */
+    .sim-speed-number {
+      width: 56px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      flex: 0 0 auto;
+    }
+    .sim-speed-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+
     input[type='range'] {
       -webkit-appearance: none;
       appearance: none;
@@ -225,6 +305,7 @@
       border: none;
       border-radius: 2px;
       flex: 1 1 auto;
+      min-width: 0; /* override the UA's intrinsic min-width so it can actually shrink in a tight row (e.g. sim speed's slider + number input + unit) */
       cursor: pointer;
     }
     input[type='range']::-webkit-slider-thumb {
@@ -254,7 +335,18 @@
       min-width: 0;
     }
 
-    .status-line { color: var(--text-faint); font-size: 11px; font-family: var(--font-mono); min-height: 14px; }
+    .status-line { color: var(--text-faint); font-size: 11px; font-family: var(--font-mono); min-height: 14px; display: flex; align-items: center; gap: 6px; }
+    .status-line.loading { color: var(--text-muted); }
+    .status-line .spinner {
+      width: 9px;
+      height: 9px;
+      border: 2px solid var(--border-strong);
+      border-top-color: var(--accent-primary);
+      border-radius: 50%;
+      flex: 0 0 auto;
+      animation: status-spin 0.7s linear infinite;
+    }
+    @keyframes status-spin { to { transform: rotate(360deg); } }
 
     /* Bottom-right toast notifications (ui/toast.ts) — used for errors
        that shouldn't sit in small inline status text easy to miss, e.g.
@@ -344,10 +436,18 @@
   <div id="app">
     <div id="topbar">
       <div id="brand"><img id="brand-logo" src="/logo.png" alt="OrbitForge logo" />OrbitForge</div>
+      <div id="sim-time-display"><span class="label">T+</span><span id="sim-time-value">00:00:00</span></div>
       <div id="run-controls-container"></div>
     </div>
     <div id="layout">
-      <canvas id="scene-canvas"></canvas>
+      <div id="scene-container">
+        <canvas id="scene-canvas"></canvas>
+        <span id="axis-label-x" class="axis-label">X</span>
+        <span id="axis-label-y" class="axis-label">Y</span>
+        <span id="axis-label-z" class="axis-label">Z</span>
+        <div id="attitude-gizmo-frame"></div>
+        <div id="attitude-gizmo-caption">True Attitude</div>
+      </div>
       <div id="controls">
         <div id="scenario-editor-container" class="control-card"></div>
         <div id="fault-panel-container" class="control-card"></div>

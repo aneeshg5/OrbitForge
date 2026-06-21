@@ -1,4 +1,5 @@
 import { parseTle, type OrbitalElements } from './tle_parser.js'
+import fallbackTlesData from './fallback_tles.json'
 
 export interface SatellitePreset {
   name: string
@@ -20,13 +21,17 @@ export const PRESETS: SatellitePreset[] = [
 
 // Last-known-good TLEs for each preset, used when the live CelesTrak fetch
 // fails (network block, CelesTrak outage, etc. — see the session notes on
-// this exact failure mode: a VPN's exit IP getting blocked/rate-limited by
-// celestrak.org while every other site works fine). These are genuinely
+// this exact failure mode: a VPN's/ISP's exit IP getting blocked/rate-limited
+// by celestrak.org while every other site works fine). These are genuinely
 // real elements fetched live from CelesTrak (not fabricated/approximated —
 // see CLAUDE.md's "real satellites, real data" premise), just possibly
 // stale by the time they're used as a fallback. cachedAt records exactly
-// when each one was captured so the UI can be honest about staleness
-// rather than presenting a fallback as if it were live.
+// when each one was captured so the UI can be honest about staleness rather
+// than presenting a fallback as if it were live.
+//
+// Lives in fallback_tles.json (not inline here) so scripts/refresh_fallback_tles.mjs
+// can regenerate it as plain data — see .github/workflows/refresh_fallback_tles.yml,
+// which runs that script weekly and commits the result.
 interface FallbackEntry {
   name: string
   line1: string
@@ -34,40 +39,7 @@ interface FallbackEntry {
   cachedAt: string // ISO date
 }
 
-const FALLBACK_CACHED_AT = '2026-06-20'
-
-const FALLBACK_TLES: Record<number, FallbackEntry> = {
-  25544: {
-    name: 'ISS (ZARYA)',
-    line1: '1 25544U 98067A   26171.41461525  .00008813  00000+0  16600-3 0  9990',
-    line2: '2 25544  51.6327 284.1189 0004557 208.5194 151.5545 15.49333088572250',
-    cachedAt: FALLBACK_CACHED_AT,
-  },
-  44714: {
-    name: 'STARLINK-1008',
-    line1: '1 44714U 19074B   26171.40542176  .00056365  00000+0  97291-3 0  9992',
-    line2: '2 44714  53.1521  53.3154 0002110 147.6682 212.4457 15.50487193364717',
-    cachedAt: FALLBACK_CACHED_AT,
-  },
-  26407: {
-    name: 'GPS BIIR-5',
-    line1: '1 26407U 00040A   26171.26496353  .00000022  00000+0  00000+0 0  9990',
-    line2: '2 26407  54.8510 215.0400 0120997 302.4995  43.5641  2.00557702190007',
-    cachedAt: FALLBACK_CACHED_AT,
-  },
-  41866: {
-    name: 'GOES 16',
-    line1: '1 41866U 16071A   26171.35461541 -.00000095  00000+0  00000+0 0  9999',
-    line2: '2 41866   0.3504  85.5238 0000306 339.5740 226.4328  1.00271436 35133',
-    cachedAt: FALLBACK_CACHED_AT,
-  },
-  33791: {
-    name: 'COSMOS 2251 DEB',
-    line1: '1 33791U 93036AG  26171.15517340  .00001529  00000+0  45236-3 0  9996',
-    line2: '2 33791  74.1736  48.4760 0029098 184.3166 335.9513 14.44017382907851',
-    cachedAt: FALLBACK_CACHED_AT,
-  },
-}
+const FALLBACK_TLES: Record<string, FallbackEntry> = fallbackTlesData
 
 export interface TleFetchResult {
   elements: OrbitalElements
@@ -75,20 +47,29 @@ export interface TleFetchResult {
   cachedAt?: string // ISO date the fallback was captured; only set when fromCache is true
 }
 
+// A working request measures well under 1s (see checkpoint notes) — 8s is
+// generous headroom for real latency while cutting off the case that
+// actually hurts: a network silently dropping the connection (firewall/IP
+// block, see tle_feed's fallback-table comment above) leaves fetch() to
+// hang on the browser's own default timeout, which can run 60s+ with zero
+// feedback. AbortController turns that into a fast, predictable failure
+// that falls through to the cached fallback below.
+const FETCH_TIMEOUT_MS = 8000
+
 // The historical /satcat/tle.php?CATNR= endpoint was deprecated in 2020
 // and removed in 2022 (confirmed live: it now returns an HTML notice, not
 // a TLE) — replaced by the "GP data" API CelesTrak migrated to.
 export async function fetchTleByNorad(noradId: number): Promise<TleFetchResult> {
   const url = `https://celestrak.org/NORAD/elements/gp.php?CATNR=${noradId}&FORMAT=TLE`
   try {
-    const resp = await fetch(url)
+    const resp = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
     if (!resp.ok) throw new Error(`CelesTrak fetch failed: ${resp.status}`)
     const text = await resp.text()
     const lines = text.trim().split('\n').map(l => l.trimEnd())
     if (lines.length < 3) throw new Error('Unexpected TLE response from CelesTrak')
     return { elements: parseTle(lines[0], lines[1], lines[2]), fromCache: false }
   } catch (err) {
-    const fallback = FALLBACK_TLES[noradId]
+    const fallback = FALLBACK_TLES[String(noradId)]
     if (!fallback) throw err
     return {
       elements: parseTle(fallback.name, fallback.line1, fallback.line2),

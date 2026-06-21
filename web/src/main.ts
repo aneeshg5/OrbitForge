@@ -9,7 +9,7 @@ import { EarthRenderer } from './renderer/earth.js'
 import { RotationAxisRenderer } from './renderer/axis.js'
 import { OrbitPathRenderer } from './renderer/orbit.js'
 import { CovarianceEllipsoidRenderer } from './renderer/covariance.js'
-import { AttitudeTriadRenderer } from './renderer/attitude.js'
+import { AttitudeGizmoRenderer, AttitudeSmoother, type GizmoViewport } from './renderer/attitude.js'
 import { Starfield } from './renderer/starfield.js'
 import { SolarSystemRenderer, sunDirectionScene } from './renderer/solar_system.js'
 import { PanelManager } from './renderer/panels.js'
@@ -37,15 +37,17 @@ import { RunControls } from './ui/run_controls.js'
 // roll about the camera's forward (Z) axis, exactly as it always was.
 const EARTH_TILT = mat4RotateZ((23.4 * Math.PI) / 180)
 
-// Stylized (not physically accurate) spin rate: one full rotation every 20
-// wall-clock seconds, always running regardless of sim state. The real
-// sidereal rate (~0.0042 deg/s, see gps.hpp's gast_rad()) would be
-// visually imperceptible over a normal session — a LEO orbit only takes
-// ~90 minutes while a real Earth rotation takes ~24 hours, so tying the
-// visual to the real rate would make the globe look static. This rate is
-// purely cosmetic; the GPS sensor model's ECI->ECEF transform still uses
-// the real GAST formula internally and is unaffected by this constant.
-const EARTH_SPIN_RAD_PER_SEC = (2 * Math.PI) / 20
+// One full rotation per 86400 SIMULATED seconds (one sim-day) — driven by
+// simTimeSec, not wall-clock, so it freezes whenever the sim is idle/
+// paused exactly like the Sun/Moon already do (solar_system.ts), and a
+// completed rotation always means "T+ just passed a day," not a cosmetic
+// loop unrelated to the clock. scenario_editor.ts's DEFAULTS.simSpeed is
+// set to 86400/20 = 4320 specifically so that, at the default speed, this
+// still completes a visible rotation roughly every 20 real seconds — the
+// same pacing the old wall-clock-driven version had — instead of being
+// imperceptibly slow at 1x. Increasing sim_speed speeds the spin up
+// further (and T+ along with it); decreasing it slows both down together.
+const SPIN_RAD_PER_SIM_SECOND = (2 * Math.PI) / 86400
 
 interface Scene {
   gl: WebGL2RenderingContext
@@ -55,7 +57,11 @@ interface Scene {
   axis: RotationAxisRenderer
   orbits: OrbitPathRenderer
   covariances: CovarianceEllipsoidRenderer
-  attitude: AttitudeTriadRenderer
+  attitude: AttitudeGizmoRenderer
+  attitudeSmoother: AttitudeSmoother
+  attitudeGizmoFrame: HTMLElement
+  axisLabels: { x: HTMLElement; y: HTMLElement; z: HTMLElement }
+  simTimeValue: HTMLElement
   panels: PanelManager
   canvas: HTMLCanvasElement
 }
@@ -190,9 +196,53 @@ function setupScene(): Scene {
     axis: new RotationAxisRenderer(gl),
     orbits: new OrbitPathRenderer(gl),
     covariances: new CovarianceEllipsoidRenderer(gl),
-    attitude: new AttitudeTriadRenderer(gl),
+    attitude: new AttitudeGizmoRenderer(gl),
+    attitudeSmoother: new AttitudeSmoother(),
+    attitudeGizmoFrame: document.getElementById('attitude-gizmo-frame')!,
+    axisLabels: {
+      x: document.getElementById('axis-label-x')!,
+      y: document.getElementById('axis-label-y')!,
+      z: document.getElementById('axis-label-z')!,
+    },
+    simTimeValue: document.getElementById('sim-time-value')!,
     panels: new PanelManager(panelCanvases, panelSelects),
   }
+}
+
+// Converts #attitude-gizmo-frame's on-screen CSS position into the device-
+// pixel, bottom-left-origin rectangle gl.viewport()/gl.scissor() expect —
+// the two coordinate systems disagree on both axis origin (DOM measures
+// from the top, WebGL from the bottom) and units (CSS px vs. device px,
+// which differ by devicePixelRatio once resizeCanvasToDisplaySize scales
+// the canvas's backing buffer). Recomputed every frame rather than cached
+// since the frame can move/resize (window resize, sidebar collapse, etc.).
+function computeGizmoViewport(canvas: HTMLCanvasElement, frame: HTMLElement): GizmoViewport {
+  const canvasRect = canvas.getBoundingClientRect()
+  const frameRect = frame.getBoundingClientRect()
+  const scaleX = canvas.width / Math.max(1, canvasRect.width)
+  const scaleY = canvas.height / Math.max(1, canvasRect.height)
+
+  const width = frameRect.width * scaleX
+  const height = frameRect.height * scaleY
+  const x = (frameRect.left - canvasRect.left) * scaleX
+  const topCss = (frameRect.top - canvasRect.top) * scaleY
+  const y = canvas.height - topCss - height // flip: DOM top-origin -> GL bottom-origin
+
+  return { x, y, width, height }
+}
+
+// Formats elapsed simulated seconds as "D:HH:MM:SS" (days only shown once
+// nonzero — at sim_speed up to 100x a long real-time session can rack up
+// many simulated hours quickly) or "HH:MM:SS" otherwise.
+function formatSimTime(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const days = Math.floor(s / 86400)
+  const hours = Math.floor((s % 86400) / 3600)
+  const minutes = Math.floor((s % 3600) / 60)
+  const seconds = s % 60
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const hms = `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
+  return days > 0 ? `${days}:${hms}` : hms
 }
 
 function resizeCanvasToDisplaySize(canvas: HTMLCanvasElement): boolean {
@@ -226,19 +276,27 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   const proj = mat4Perspective((45 * Math.PI) / 180, aspect, 0.05, 100)
   const view = mat4Multiply(camera.viewMatrix(), EARTH_TILT)
 
-  // Driven by wall-clock time, not sim_time: this is a purely cosmetic
-  // spin (see EARTH_SPIN_RAD_PER_SEC above), so it keeps turning whether
-  // the sim is idle, running, or paused, the way a desk globe would —
-  // tying it to sim_time would freeze it whenever the sim isn't running.
+  // tSec still drives the Sun's surface turbulence/corona wisp shaders
+  // (solar_system.ts) continuously, wall-clock as before — those are
+  // pure shader liveliness, unrelated to simulated time.
   const tSec = performance.now() / 1000
-  const spinAngle = (tSec * EARTH_SPIN_RAD_PER_SEC) % (2 * Math.PI)
+
+  // Sun/Moon/Earth-spin are all driven by simulated elapsed time, not
+  // wall-clock (see solar_system.ts's SUN_ORBIT_PERIOD_SEC comment for
+  // why) — 0 before the sim has produced any frames, so they sit at their
+  // initial phase rather than drifting while idle, and freeze whenever the
+  // sim is idle/paused without any separate run-state check needed.
+  const simTimeSec = latestFrame ? latestFrame.simTime : 0
+  scene.simTimeValue.textContent = formatSimTime(simTimeSec)
+
+  const spinAngle = (simTimeSec * SPIN_RAD_PER_SIM_SECOND) % (2 * Math.PI)
   const earthModel = mat4RotateY(spinAngle)
 
-  // Current Sun direction (Earth -> Sun, stylized, wall-clock-driven) —
-  // see solar_system.ts's sunDirectionScene(). Used as the light source
-  // for both Earth and the Moon, so the visible Sun position and the lit
-  // hemisphere always stay in sync as the Sun orbits.
-  const sunDirScene = sunDirectionScene(tSec)
+  // Current Sun direction (Earth -> Sun) — see solar_system.ts's
+  // sunDirectionScene(). Used as the light source for both Earth and the
+  // Moon, so the visible Sun position and the lit hemisphere always stay
+  // in sync as the Sun orbits.
+  const sunDirScene = sunDirectionScene(simTimeSec)
 
   // Starfield still uses a translation-stripped view (genuinely
   // infinitely distant) — see starfield.ts. The Sun and Moon are real,
@@ -259,24 +317,87 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
     scene.covariances.render(view, proj, latestFrame.kfPos, [latestFrame.kfCovDiag[0], latestFrame.kfCovDiag[1], latestFrame.kfCovDiag[2]], FILTER_COLOR_RGB.kf)
     scene.covariances.render(view, proj, latestFrame.ekfPos, [latestFrame.ekfCovDiag[6], latestFrame.ekfCovDiag[7], latestFrame.ekfCovDiag[8]], FILTER_COLOR_RGB.ekf)
     scene.covariances.render(view, proj, latestFrame.ukfPos, [latestFrame.ukfCovDiag[6], latestFrame.ukfCovDiag[7], latestFrame.ukfCovDiag[8]], FILTER_COLOR_RGB.ukf)
-
-    // Phase 5: true-attitude body-axes triad — see attitude.ts's doc for
-    // why this renders only the true attitude, not EKF/UKF estimates too.
-    scene.attitude.render(view, proj, latestFrame.truePos, latestFrame.trueQuat)
   }
 
-  scene.solarSystem.render(view, proj, sunDirScene, tSec)
+  scene.solarSystem.render(view, proj, sunDirScene, tSec, simTimeSec)
+
+  // Phase 5: fixed-corner attitude gizmo — see attitude.ts's doc for why
+  // this renders only the true attitude (not EKF/UKF too) as a
+  // screen-space-fixed indicator rather than a 3D object in the world.
+  // Renders unconditionally, not just once latestFrame exists — an
+  // identity-quaternion fallback before the sim has produced any frames,
+  // so the gizmo is never an empty box waiting for Run to be clicked.
+  // Must be the LAST draw of the frame: it overwrites a small
+  // sub-rectangle of this same canvas/depth buffer, so anything drawn
+  // after it (there is nothing) would paint over it.
+  const gizmoViewport = computeGizmoViewport(scene.canvas, scene.attitudeGizmoFrame)
+  const gizmoTargetQuat: StateFrame['trueQuat'] = latestFrame ? latestFrame.trueQuat : [0, 0, 0, 1]
+  // Caps the displayed rotation rate so high sim_speed doesn't strobe the
+  // triad into looking like duplicated axes (see AttitudeSmoother's doc in
+  // attitude.ts) — called once per frame, result shared by render() and
+  // computeAxisTipsNdc() below so the lines and labels never disagree.
+  const gizmoQuat = scene.attitudeSmoother.update(gizmoTargetQuat)
+  scene.attitude.render(gizmoQuat, gizmoViewport, canvas.width, canvas.height)
+
+  // X/Y/Z labels track their actual rotating axis tip rather than sitting
+  // in a static legend — project each tip through the same transform
+  // render() just used, then convert from NDC to a CSS pixel position
+  // relative to #scene-container (the labels' positioned ancestor).
+  const gizmoAspect = gizmoViewport.width / Math.max(1, gizmoViewport.height)
+  const axisTips = scene.attitude.computeAxisTipsNdc(gizmoQuat, gizmoAspect)
+  const frameRect = scene.attitudeGizmoFrame.getBoundingClientRect()
+  const containerRect = canvas.parentElement!.getBoundingClientRect()
+  positionAxisLabel(scene.axisLabels.x, axisTips.x, frameRect, containerRect)
+  positionAxisLabel(scene.axisLabels.y, axisTips.y, frameRect, containerRect)
+  positionAxisLabel(scene.axisLabels.z, axisTips.z, frameRect, containerRect)
 
   scene.panels.render()
 }
 
-function startRenderLoop(scene: Scene, camera: OrbitCamera, getRingReader: () => RingReader | undefined): void {
+// ndc: normalized device coords ([-1,1], y-up) of a point within
+// frameRect (the gizmo's on-screen CSS rect). Converts to a CSS pixel
+// position relative to containerRect (#scene-container, the labels'
+// nearest positioned ancestor) and applies it directly to the element.
+function positionAxisLabel(
+  label: HTMLElement,
+  ndc: readonly [number, number],
+  frameRect: DOMRect,
+  containerRect: DOMRect,
+): void {
+  const xWithinFrame = (ndc[0] * 0.5 + 0.5) * frameRect.width
+  const yWithinFrame = (1 - (ndc[1] * 0.5 + 0.5)) * frameRect.height // flip: NDC y-up -> CSS y-down
+  label.style.left = `${frameRect.left - containerRect.left + xWithinFrame}px`
+  label.style.top = `${frameRect.top - containerRect.top + yWithinFrame}px`
+}
+
+// Returns a resetView() handle so main() can clear the previous run's
+// stale state client-side the moment Reset is clicked — independent of the
+// worker roundtrip, so the old orbit trail/satellite position don't linger
+// on screen until the next frame happens to arrive (it may never arrive at
+// all if the user doesn't press Run again right away).
+function startRenderLoop(
+  scene: Scene,
+  camera: OrbitCamera,
+  getRingReader: () => RingReader | undefined,
+): { resetView: () => void } {
   let latestFrame: StateFrame | undefined
+
+  function clearView(): void {
+    latestFrame = undefined
+    scene.orbits.clear()
+  }
 
   function tick(): void {
     const ringReader = getRingReader()
     if (ringReader) {
-      const frames = ringReader.drain()
+      const { frames, reset } = ringReader.drain()
+      // Authoritative: fires once the ring buffer is observed to have
+      // actually wrapped (RingReader.drain()'s doc) — covers the gap
+      // between resetView()'s optimistic clear and the worker really
+      // having run reset_simulation(), during which a frame or two from
+      // just before the reset could otherwise still land and make T+
+      // briefly show a stale non-zero value after Reset.
+      if (reset) clearView()
       for (const frame of frames) {
         feedFrameToScene(scene, frame)
         latestFrame = frame
@@ -287,6 +408,8 @@ function startRenderLoop(scene: Scene, camera: OrbitCamera, getRingReader: () =>
     requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
+
+  return { resetView: clearView }
 }
 
 function registerServiceWorker(): void {
@@ -310,10 +433,13 @@ async function main(): Promise<void> {
   const camera = new OrbitCamera(scene.canvas)
 
   let ringReader: RingReader | undefined
-  startRenderLoop(scene, camera, () => ringReader)
+  const { resetView } = startRenderLoop(scene, camera, () => ringReader)
 
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
-  const postToWorker = (msg: WorkerRequest): void => worker.postMessage(msg)
+  const postToWorker = (msg: WorkerRequest): void => {
+    if (msg.type === 'reset') resetView()
+    worker.postMessage(msg)
+  }
 
   const mcContainer = document.getElementById('mc-results-container')!
   const mcResults = new MCResultsPanel(mcContainer, { postToWorker })

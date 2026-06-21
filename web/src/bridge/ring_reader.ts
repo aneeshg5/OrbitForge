@@ -68,9 +68,32 @@ export class RingReader {
     return out
   }
 
-  /** Returns all pending frames (may be empty). */
-  drain(): StateFrame[] {
+  /**
+   * Returns pending frames plus whether the producer's counters were just
+   * observed to wrap back to (near) zero — the authoritative signal that
+   * reset_simulation() actually ran (engine/include/memory/ring_buffer.hpp's
+   * clear()), as opposed to main.ts's own optimistic client-side clear the
+   * instant Reset is clicked (which can't know exactly when the WASM side
+   * catches up, so a frame or two from just before the real reset can
+   * still land after that optimistic clear). Callers should treat `reset`
+   * as the cue to clear any state derived from frames, even if they
+   * already did so optimistically.
+   */
+  drain(): { frames: StateFrame[]; reset: boolean } {
     const writePos = Atomics.load(this.writePosView, 0)
+
+    // readPos only ever increases, so once it's ahead of a freshly-zeroed
+    // writePos, the loop below can never reach readPos === writePos again
+    // through normal increments — left unhandled, this spins effectively
+    // forever inside a single requestAnimationFrame tick (confirmed: this
+    // is what was hard-locking/crashing the tab on Reset). Resync instead
+    // of looping.
+    if (writePos < this.readPos) {
+      this.readPos = writePos
+      Atomics.store(this.readPosView, 0, this.readPos)
+      return { frames: [], reset: true }
+    }
+
     const frames: StateFrame[] = []
 
     while (this.readPos !== writePos) {
@@ -111,6 +134,6 @@ export class RingReader {
     }
 
     Atomics.store(this.readPosView, 0, this.readPos)
-    return frames
+    return { frames, reset: false }
   }
 }

@@ -1,0 +1,38 @@
+name: Refresh fallback TLEs
+
+on:
+  schedule:
+    # Mondays 06:00 UTC. CelesTrak publishes 1-4x/day, so weekly is a
+    # maintenance cadence, not a freshness requirement — the cached entries
+    # are a fallback for when the live per-user fetch fails, not the
+    # primary path (see web/src/data/tle_feed.ts).
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Refresh fallback_tles.json
+        run: node scripts/refresh_fallback_tles.mjs
+        working-directory: web
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- web/src/data/fallback_tles.json; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add web/src/data/fallback_tles.json
+          git commit -m "Refresh fallback TLEs"
+          git push
