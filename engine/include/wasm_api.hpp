@@ -85,6 +85,16 @@ public:
     void reset();
     void set_fault(const faults::FaultConfig& cfg);
 
+    // Changes the playback rate for the *next* start()/resume, without
+    // touching x_true_, filter state, or sim_time — unlike reset(), this
+    // doesn't restart the scenario. Only safe while paused/idle: run_loop()
+    // reads cfg_.sim_speed every tick with no synchronization, since
+    // nothing else has ever mutated cfg_ after init_scenario() while the
+    // worker thread could be running concurrently. Calling this while
+    // running() is a data race (debug-asserted, not handled at runtime —
+    // CLAUDE.md §20: assertions for preconditions, not hot-path checks).
+    void set_sim_speed(double sim_speed);
+
     void step(double dt);
 
     // Runs an EKF Monte Carlo consistency campaign against the scenario's
@@ -174,6 +184,7 @@ void      reset_simulation();
 uintptr_t get_ring_buffer_ptr();
 size_t    get_ring_buffer_capacity();
 void      set_fault(const faults::FaultConfig& fault);
+void      set_sim_speed(double sim_speed);
 double    get_sim_time();
 bool      is_running();
 

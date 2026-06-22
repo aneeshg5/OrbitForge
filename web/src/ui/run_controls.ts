@@ -15,6 +15,11 @@ export interface RunControlsOptions {
   // same pattern as getConfig: ScenarioEditor's duration input can change
   // mid-run without RunControls needing to be told explicitly.
   getRunDurationSec: () => number | undefined
+  // Read on every Continue (paused->running) so a speed change made while
+  // paused takes effect on resume — engine/src/wasm_api.cpp's
+  // set_sim_speed() is only safe to call while the worker thread is
+  // stopped, which Continue's transition guarantees (pause() joins it).
+  getSimSpeed: () => number
 }
 
 type RunState = 'idle' | 'running' | 'paused'
@@ -36,6 +41,7 @@ export class RunControls {
   private readonly postToWorker: (msg: WorkerRequest) => void
   private readonly getConfig: () => ScenarioConfig | undefined
   private readonly getRunDurationSec: () => number | undefined
+  private readonly getSimSpeed: () => number
   private readonly toggleButton: HTMLButtonElement
   private readonly resetButton: HTMLButtonElement
   private state: RunState = 'idle'
@@ -56,6 +62,7 @@ export class RunControls {
     this.postToWorker = options.postToWorker
     this.getConfig = options.getConfig
     this.getRunDurationSec = options.getRunDurationSec
+    this.getSimSpeed = options.getSimSpeed
 
     const root = el('div', 'run-controls')
     this.toggleButton = el('button', 'run-toggle-btn')
@@ -83,6 +90,12 @@ export class RunControls {
       if (!cfg) return
       this.postToWorker({ type: 'init', payload: cfg })
       this.lastAutoStopAtSec = undefined
+    } else {
+      // Resuming from pause: init's already-consumed config won't pick up
+      // a speed change made while paused, so push the current value before
+      // resuming. Safe specifically because pause() has fully stopped the
+      // worker thread by this point (see getSimSpeed's doc comment).
+      this.postToWorker({ type: 'set_sim_speed', payload: { simSpeed: this.getSimSpeed() } })
     }
     this.postToWorker({ type: 'start' })
     this.state = 'running'

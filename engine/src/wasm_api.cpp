@@ -1,5 +1,6 @@
 #include "wasm_api.hpp"
 
+#include <cassert>
 #include <chrono>
 #include <thread>
 
@@ -139,6 +140,12 @@ void Simulation::reset() {
 
 void Simulation::set_fault(const faults::FaultConfig& cfg) {
     fault_queue_.set(cfg);
+}
+
+void Simulation::set_sim_speed(double sim_speed) {
+    assert(!running_.load(std::memory_order_relaxed) &&
+           "set_sim_speed() while running races run_loop()'s unsynchronized read of cfg_.sim_speed — pause() first");
+    cfg_.sim_speed = sim_speed;
 }
 
 void Simulation::run_monte_carlo(size_t n_runs, int seed) {
@@ -400,6 +407,7 @@ void reset_simulation() { global_simulation().reset(); }
 uintptr_t get_ring_buffer_ptr() { return global_simulation().get_ring_buffer_ptr(); }
 size_t get_ring_buffer_capacity() { return Simulation::get_ring_buffer_capacity(); }
 void set_fault(const faults::FaultConfig& fault) { global_simulation().set_fault(fault); }
+void set_sim_speed(double sim_speed) { global_simulation().set_sim_speed(sim_speed); }
 double get_sim_time() { return global_simulation().get_sim_time(); }
 bool is_running() { return global_simulation().is_running(); }
 
@@ -487,6 +495,9 @@ void set_fault(int fault_type, double onset_t, double duration, double magnitude
     cfg.magnitude = magnitude;
     orbitforge::set_fault(cfg);
 }
+
+EMSCRIPTEN_KEEPALIVE
+void set_sim_speed(double sim_speed) { orbitforge::set_sim_speed(sim_speed); }
 
 EMSCRIPTEN_KEEPALIVE
 double get_sim_time() { return orbitforge::get_sim_time(); }

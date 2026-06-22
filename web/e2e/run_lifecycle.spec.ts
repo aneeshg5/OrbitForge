@@ -89,6 +89,35 @@ test('sim speed: default is fast enough to be meaningful, and the typed input cl
   await expect(numberInput).toHaveValue('5000')
 })
 
+test('sim speed: changing it while paused takes effect on Continue', async ({ page }) => {
+  const speedInput = page.locator('.sim-speed-number')
+  await speedInput.fill('10')
+  await speedInput.dispatchEvent('change')
+
+  await page.getByRole('button', { name: '▶ Run' }).click()
+  await expect.poll(() => readSimSeconds(page), { timeout: 10_000 }).toBeGreaterThan(0)
+  await page.waitForTimeout(800)
+  await page.getByRole('button', { name: '⏸ Pause' }).click()
+  const slowAdvance = await readSimSeconds(page)
+
+  // engine/src/wasm_api.cpp's Simulation::set_sim_speed() is only safe
+  // while the worker thread is stopped — pause() above guarantees that,
+  // so this is exactly the sequence a user clicking Pause, retyping the
+  // speed, then Continue would produce.
+  await speedInput.fill('2000')
+  await speedInput.dispatchEvent('change')
+  await page.getByRole('button', { name: '▶ Continue' }).click()
+  await page.waitForTimeout(800)
+  await page.getByRole('button', { name: '⏸ Pause' }).click()
+  const fastAdvance = (await readSimSeconds(page)) - slowAdvance
+
+  // 200x the speed over the same ~800ms wait — assert a wide margin
+  // (10x, not 200x) to stay robust against timing jitter while still
+  // clearly proving the new speed took effect rather than the old one
+  // silently persisting.
+  expect(fastAdvance).toBeGreaterThan(slowAdvance * 10)
+})
+
 test('run duration: auto-stops at the target and Continue does not immediately re-trigger it', async ({ page }) => {
   await page.locator('.duration-number').fill('10')
   await page.locator('.duration-unit').selectOption('60') // minutes -> 600s target

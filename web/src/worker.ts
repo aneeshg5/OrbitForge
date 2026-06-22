@@ -20,11 +20,25 @@ export interface SetFaultMessage {
   type: 'set_fault'
   payload: FaultConfig
 }
+// Only safe to send while paused/idle — Simulation::set_sim_speed() (C++)
+// is unsynchronized against run_loop()'s own thread, by design (see its
+// doc comment): nothing else mutates cfg_ while that thread could be
+// running, so this preserves the same invariant rather than needing a new
+// one. RunControls only ever sends this right before resuming from pause.
+export interface SetSimSpeedMessage {
+  type: 'set_sim_speed'
+  payload: { simSpeed: number }
+}
 export interface RunMonteCarloMessage {
   type: 'run_monte_carlo'
   payload: { nRuns: number; seed: number }
 }
-export type WorkerRequest = InitMessage | ControlMessage | SetFaultMessage | RunMonteCarloMessage
+export type WorkerRequest =
+  | InitMessage
+  | ControlMessage
+  | SetFaultMessage
+  | SetSimSpeedMessage
+  | RunMonteCarloMessage
 
 export interface RingBufferReadyMessage {
   type: 'ring_buffer_ready'
@@ -167,6 +181,9 @@ self.addEventListener('message', (e: MessageEvent<WorkerRequest>) => {
           ['number', 'number', 'number', 'number'],
           [msg.payload.type, msg.payload.onsetT, msg.payload.duration, msg.payload.magnitude],
         )
+        break
+      case 'set_sim_speed':
+        module.ccall('set_sim_speed', null, ['number'], [msg.payload.simSpeed])
         break
       case 'run_monte_carlo': {
         const stats = runMonteCarlo(module, msg.payload.nRuns, msg.payload.seed)

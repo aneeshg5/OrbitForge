@@ -403,6 +403,15 @@ export class ScenarioEditor {
     return value * Number(this.durationUnit.value)
   }
 
+  // Read independently of getConfig() — RunControls needs this on every
+  // paused->running (Continue) transition, not just the one idle->running
+  // transition getConfig() is consumed on, so a speed change made while
+  // paused actually takes effect on resume.
+  getSimSpeed(): number {
+    const value = Number(this.simSpeedInput.value)
+    return Number.isFinite(value) && value > 0 ? value : DEFAULTS.simSpeed
+  }
+
   // Returns the scenario config to launch with, or undefined (and reports
   // why via a toast) if no TLE is available yet.
   getConfig(): ScenarioConfig | undefined {

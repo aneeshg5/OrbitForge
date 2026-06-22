@@ -137,6 +137,31 @@ TEST(Simulation, StartPauseTogglesIsRunningAndAdvancesTime) {
     EXPECT_GT(sim.get_sim_time(), 0.0);
 }
 
+TEST(Simulation, SetSimSpeedTakesEffectOnNextStartAfterPause) {
+    Simulation sim;
+    ScenarioCfg cfg = iss_like_cfg();
+    cfg.sim_speed = 1.0;
+    sim.init_scenario(cfg);
+
+    sim.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    sim.pause();
+    const double advance_at_1x = sim.get_sim_time();
+    ASSERT_GT(advance_at_1x, 0.0);
+
+    sim.set_sim_speed(50.0);
+    sim.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    sim.pause();
+    const double advance_at_50x = sim.get_sim_time() - advance_at_1x;
+
+    // Real-time-based (same category as StartPauseTogglesIsRunningAndAdvancesTime
+    // above), so this asserts a wide margin rather than a precise 50x ratio
+    // to stay robust against scheduling jitter — the point is confirming
+    // set_sim_speed() actually changed the rate, not measuring it exactly.
+    EXPECT_GT(advance_at_50x, advance_at_1x * 10.0);
+}
+
 TEST(Simulation, GpsDropoutFaultSuppressesMeasurementUpdate) {
     Simulation sim;
     sim.init_scenario(iss_like_cfg());

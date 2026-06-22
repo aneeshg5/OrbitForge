@@ -253,6 +253,19 @@
     .scenario-editor .row select { flex: 1 1 auto; min-width: 0; }
     .fault-panel { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
     .fault-row { display: inline-flex; align-items: center; gap: 4px; }
+    .fault-field { display: inline-flex; align-items: center; gap: 2px; }
+    .fault-field-input {
+      width: 56px;
+      padding: 4px 5px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+    }
+    .fault-field-input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+    .fault-field-unit { font-size: 11px; color: var(--text-faint); }
 
     button {
       font-family: var(--font-ui);

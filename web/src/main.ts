@@ -475,6 +475,7 @@ async function main(): Promise<void> {
     postToWorker,
     getConfig: () => scenarioEditor.getConfig(),
     getRunDurationSec: () => scenarioEditor.getRunDurationSec(),
+    getSimSpeed: () => scenarioEditor.getSimSpeed(),
   })
   scenarioEditor = new ScenarioEditor(scenarioContainer, {
     onAvailabilityChange: (available) => runControls!.setRunEnabled(available),
