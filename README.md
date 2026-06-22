@@ -40,6 +40,48 @@ Key decisions:
 
 See [docs/architecture.md](docs/architecture.md) for the full design and [docs/math.md](docs/math.md) for every filter Jacobian derivation.
 
+## Getting Started
+
+### Prerequisites
+
+- CMake >= 3.18
+- A C++17 compiler
+- Eigen3 (`brew install eigen` on macOS, `apt install libeigen3-dev` on Ubuntu)
+- Node.js and npm
+- [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) 3.1.50 (only needed to build the WASM bundle)
+
+### 1. Build and test the engine (native, no Emscripten needed)
+
+```bash
+cmake -B build -DCMAKE_BUILD_TYPE=Debug engine/
+cmake --build build -j$(nproc)
+cd build && ctest --output-on-failure
+```
+
+### 2. Build the WASM bundle
+
+```bash
+# one-time setup
+git clone https://github.com/emscripten-core/emsdk.git /opt/emsdk
+/opt/emsdk/emsdk install 3.1.50
+/opt/emsdk/emsdk activate 3.1.50
+
+# build
+./scripts/build_wasm.sh
+```
+
+This produces `web/public/orbitforge.wasm` and `web/public/orbitforge.js`.
+
+### 3. Run the web app
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The dev server sets the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers `SharedArrayBuffer` requires. Without them the WASM module will fail to load with a cross-origin isolation error.
+
 ## Project Structure
 
 ```
