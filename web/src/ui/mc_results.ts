@@ -65,10 +65,32 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return e
 }
 
-// RMS table rows sample the campaign's per-step series at fixed fractions
-// of its duration rather than every step, distinct from the line-chart
-// treatment used for NEES/NIS.
-const TABLE_FRACTIONS = [0.25, 0.5, 0.75, 1.0]
+// RMS table rows sample the campaign's per-step series at a handful of
+// evenly-spaced step indices rather than every step, distinct from the
+// line-chart treatment used for NEES/NIS (those plot every step). Always
+// includes step 0 and the last step, with up to `count - 2` more spread
+// evenly between them — not fixed fractions of the run (0.25/0.5/0.75/1.0
+// of nSteps), which is what this replaced: with a small nSteps (Steps is
+// now a user-configurable field, not always the original fixed 500), those
+// fractions round to indices that skip step 0 entirely (e.g. nSteps=5
+// rounds 0.25*4=1, never 0), which read as "the table is missing the
+// start of the run" — confirmed by a live report of exactly that.
+//
+// Three regimes verified by hand: nSteps=1 collapses every fraction to
+// index 0 — old code produced 4 duplicate rows; new code dedupes via the
+// Set, producing exactly 1. nSteps < count (e.g. 3) produces one row per
+// step, all distinct, still always including 0 and nSteps-1. nSteps >=
+// count (typical — default is 500) produces `count` evenly-spaced rows
+// from 0 to nSteps-1 inclusive.
+function sampleStepIndices(nSteps: number, count: number): number[] {
+  if (nSteps <= 0) return []
+  const n = Math.min(count, nSteps)
+  const indices = new Set<number>()
+  for (let i = 0; i < n; i++) {
+    indices.add(n === 1 ? 0 : Math.round((i * (nSteps - 1)) / (n - 1)))
+  }
+  return [...indices].sort((a, b) => a - b)
+}
 
 function histogramBins(values: number[], bins: number): { labels: string[]; counts: number[] } {
   if (values.length === 0) return { labels: [], counts: [] }
@@ -470,8 +492,7 @@ export class MCResultsPanel {
 
     this.rmsTableBody.replaceChildren()
     const nSteps = stats.rmsPosPerStep.length
-    for (const frac of TABLE_FRACTIONS) {
-      const idx = Math.min(nSteps - 1, Math.max(0, Math.round(frac * (nSteps - 1))))
+    for (const idx of sampleStepIndices(nSteps, 4)) {
       const row = el('tr')
       for (const text of [
         ((idx + 1) * this.lastDt).toFixed(0),
