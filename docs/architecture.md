@@ -12,7 +12,7 @@ The simulation, the three filters, and the sensor models all run as
 C++17 compiled to WebAssembly, executing entirely client-side. There is
 no backend: no API server, no database, no per-user compute cost. The
 physics code is the same code whether you're reading it on GitHub or
-running it at orbitforge.dev — nothing is hidden behind an API
+running it at orbitforge.pages.dev — nothing is hidden behind an API
 boundary.
 
 ## Thread model
