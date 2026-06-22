@@ -26,7 +26,7 @@ import {
   Legend,
   Tooltip,
 } from 'chart.js'
-import { MCFilterKind, type MCStats } from '../bridge/wasm_types.js'
+import { MCFilterKind, type MCStats, type ScenarioConfig } from '../bridge/wasm_types.js'
 import type { WorkerRequest } from '../worker.js'
 import { makeInfoButton } from './info_button.js'
 
@@ -37,6 +37,12 @@ Chart.register(
 
 export interface MCResultsOptions {
   postToWorker: (msg: WorkerRequest) => void
+  // Read on a Run MC click that hasn't been preceded by any init (see
+  // onRunMC()) — lets Monte Carlo init the live Simulation itself instead
+  // of requiring the user to click the topbar Run button first just to
+  // populate x_true_initial_, which had no visible connection to "fill out
+  // the MC fields and click Run MC" from the user's side.
+  getConfig: () => ScenarioConfig | undefined
 }
 
 const TEXT_MUTED = 'rgba(136, 145, 168, 0.9)'
@@ -119,14 +125,25 @@ export class MCResultsPanel {
   // label the RMS table / NEES/NIS chart x-axes correctly (was hardcoded
   // to 10.0 back when dt itself was hardcoded).
   private lastDt = DEFAULTS.dt
-  // True once the live scenario has been initialized at least once (see
-  // the runButton construction comment below) — starts false so the
-  // button is visibly disabled before the first Run, mirroring
-  // RunControls' own runEnabled gating pattern.
-  private mcEnabled = false
+  // Whether ScenarioEditor.getConfig() would currently succeed (a
+  // satellite/TLE is loaded) — gates the button itself, same signal and
+  // wording RunControls' own runEnabled uses. Independent of whether
+  // init_scenario() has actually been called yet (see `initialized`
+  // below): a config existing doesn't mean the engine has consumed it.
+  private runEnabled = false
+  // True once the live Simulation has been init_scenario()'d at least
+  // once — either because the user clicked the topbar Run button, or
+  // because onRunMC() did it itself on a first Run MC click (see
+  // onRunMC()). Monte Carlo's initial condition is a snapshot of the live
+  // Simulation's true state (x_true_initial_, wasm_api.hpp), only
+  // populated by that call — before it's ever run once, a campaign would
+  // run against a zeroed-out state vector and produce all-NaN results.
+  private initialized = false
+  private readonly getConfig: () => ScenarioConfig | undefined
 
   constructor(container: HTMLElement, options: MCResultsOptions) {
     this.postToWorker = options.postToWorker
+    this.getConfig = options.getConfig
 
     const details = el('details', 'mc-panel')
     const summary = el('summary')
@@ -248,14 +265,6 @@ export class MCResultsPanel {
     this.runButton.textContent = '▶ Run MC'
     this.runButton.addEventListener('click', () => this.onRunMC())
     actionRow.appendChild(this.runButton)
-    // Monte Carlo's initial condition is a snapshot of the live
-    // Simulation's true state (engine/include/wasm_api.hpp's
-    // x_true_initial_), which is only populated by init_scenario() — sent
-    // on the first "Run" click, not merely picking a satellite/TLE. Before
-    // that, a campaign would run against a zeroed-out state vector and
-    // produce all-NaN results (orbital mechanics divides by |r|, which is
-    // 0). Disabled here and enabled by main.ts's setMcEnabled() the moment
-    // it observes the first 'init' message go to the worker.
     this.updateRunButtonState()
 
     this.statusLine = el('div', 'status-line')
@@ -381,7 +390,22 @@ export class MCResultsPanel {
   }
 
   private onRunMC(): void {
-    if (!this.mcEnabled || this.running) return
+    if (!this.runEnabled || this.running) return
+
+    // First Run MC click ever (or the first since a fresh page load):
+    // init the live Simulation ourselves rather than requiring the user
+    // to have separately clicked the topbar Run button first — that
+    // extra click had no visible connection to "fill out these fields
+    // and click Run MC" from the user's side. Subsequent clicks skip
+    // this; re-initializing on every click would reset live sim state
+    // (T+, orbit trail) out from under a user who's mid-run and just
+    // wants another MC campaign.
+    if (!this.initialized) {
+      const cfg = this.getConfig()
+      if (!cfg) return // runEnabled implies this should never happen
+      this.postToWorker({ type: 'init', payload: cfg })
+      this.initialized = true
+    }
 
     const nRuns = Math.max(1, Math.round(Number(this.runsInput.value) || DEFAULTS.nRuns))
     const nSteps = Math.max(1, Math.round(Number(this.stepsInput.value) || DEFAULTS.nSteps))
@@ -405,16 +429,21 @@ export class MCResultsPanel {
     return this.running
   }
 
-  /** Called by main.ts the moment it observes the first 'init' message go to the worker — see runButton's construction comment. */
-  setMcEnabled(enabled: boolean): void {
-    this.mcEnabled = enabled
+  /** Called by ScenarioEditor whenever getConfig() availability changes — same signal/wording RunControls' own setRunEnabled uses. */
+  setRunEnabled(enabled: boolean): void {
+    this.runEnabled = enabled
     this.updateRunButtonState()
   }
 
+  /** Called by main.ts whenever an 'init' message goes to the worker (including ones triggered by the topbar Run button), so onRunMC() knows not to redundantly init again itself. */
+  markInitialized(): void {
+    this.initialized = true
+  }
+
   private updateRunButtonState(): void {
-    const disabled = !this.mcEnabled || this.running
+    const disabled = !this.runEnabled || this.running
     this.runButton.disabled = disabled
-    this.runButton.title = this.mcEnabled ? '' : "Click Run first — Monte Carlo reuses the live scenario's initial state"
+    this.runButton.title = this.runEnabled ? '' : 'Select a satellite or paste a TLE first'
   }
 
   /** Called by main.ts every render frame while isRunning(), with the live mc_progress_counter() value. */

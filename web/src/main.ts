@@ -462,11 +462,15 @@ async function main(): Promise<void> {
   const scene = setupScene()
   const camera = new OrbitCamera(scene.canvas)
 
-  // runControls is constructed later (it needs scenarioEditor, see below) —
-  // referenced here only inside a closure invoked every render frame, by
-  // which point it's assigned. Mirrors the ringReader forward-reference
-  // pattern just below.
+  // runControls and scenarioEditor are constructed later (each needs the
+  // other — RunControls.getConfig needs scenarioEditor, and
+  // scenarioEditor's availability callback needs runControls and
+  // mcResults) — all three referenced here only inside closures invoked
+  // later (on click, or after MCResultsPanel exists), by which point
+  // they're assigned. Mirrors the ringReader forward-reference pattern
+  // just below.
   let runControls: RunControls | undefined
+  let scenarioEditor: ScenarioEditor | undefined
   let ringReader: RingReader | undefined
   let mcProgress: McProgressReader | undefined
   // mcResults itself (not just the ring buffer/progress reader) needs a
@@ -483,18 +487,20 @@ async function main(): Promise<void> {
     if (msg.type === 'reset') resetView()
     // 'init' is what populates the live Simulation's x_true_initial_
     // (wasm_api.hpp) that run_monte_carlo() snapshots as its starting
-    // condition — before this has ever fired once, a campaign would run
-    // against a zeroed-out state and produce all-NaN results. A one-way
-    // latch: 'init' resends on every Reset->Run cycle too, but
-    // setMcEnabled(true) is idempotent and Reset doesn't invalidate the
-    // C++-side snapshot (Simulation::reset() re-runs init_scenario() with
-    // the same cfg_), so there's no case where MC should go back to disabled.
-    if (msg.type === 'init') mcResults!.setMcEnabled(true)
+    // condition. Marking MCResultsPanel initialized here covers the case
+    // where the user clicked the topbar Run button themselves (MC's own
+    // onRunMC() covers the other case — clicking Run MC first, with
+    // nothing else run yet). A one-way latch: 'init' resends on every
+    // Reset->Run cycle too, but markInitialized() is idempotent and Reset
+    // doesn't invalidate the C++-side snapshot (Simulation::reset()
+    // re-runs init_scenario() with the same cfg_), so there's no case
+    // where MC should go back to uninitialized.
+    if (msg.type === 'init') mcResults!.markInitialized()
     worker.postMessage(msg)
   }
 
   const mcContainer = document.getElementById('mc-results-container')!
-  mcResults = new MCResultsPanel(mcContainer, { postToWorker })
+  mcResults = new MCResultsPanel(mcContainer, { postToWorker, getConfig: () => scenarioEditor!.getConfig() })
 
   worker.addEventListener('message', (e: MessageEvent<WorkerResponse>) => {
     if (e.data.type === 'ring_buffer_ready') {
@@ -511,19 +517,22 @@ async function main(): Promise<void> {
   new FaultPanel(faultContainer, { postToWorker, getCurrentSimTimeSec })
 
   // RunControls.getConfig needs scenarioEditor and scenarioEditor's
-  // availability callback needs runControls — constructed in this order
-  // (runControls first, referencing scenarioEditor only inside a closure
-  // invoked later on click) to break the cycle without a null check.
-  let scenarioEditor: ScenarioEditor
+  // availability callback needs runControls and mcResults — constructed
+  // in this order (runControls first, referencing scenarioEditor only
+  // inside a closure invoked later on click) to break the cycle without a
+  // null check.
   const runControlsContainer = document.getElementById('run-controls-container')!
   runControls = new RunControls(runControlsContainer, {
     postToWorker,
-    getConfig: () => scenarioEditor.getConfig(),
-    getRunDurationSec: () => scenarioEditor.getRunDurationSec(),
-    getSimSpeed: () => scenarioEditor.getSimSpeed(),
+    getConfig: () => scenarioEditor!.getConfig(),
+    getRunDurationSec: () => scenarioEditor!.getRunDurationSec(),
+    getSimSpeed: () => scenarioEditor!.getSimSpeed(),
   })
   scenarioEditor = new ScenarioEditor(scenarioContainer, {
-    onAvailabilityChange: (available) => runControls!.setRunEnabled(available),
+    onAvailabilityChange: (available) => {
+      runControls!.setRunEnabled(available)
+      mcResults!.setRunEnabled(available)
+    },
   })
 }
 
