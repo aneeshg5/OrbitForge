@@ -135,16 +135,24 @@ export class MCResultsPanel {
 
     const body = el('div', 'mc-body')
 
-    const { row: runsRow, input: runsInput } = this.makeNumberRow('Runs:', {
-      min: '1', step: '1', value: String(DEFAULTS.nRuns),
-      explanation: 'Number of independent realizations in this campaign. More runs make the NEES/NIS ' +
-        'averages and the histogram smoother, at a roughly linear cost in time.',
-    })
-    this.runsInput = runsInput
+    // Toolbar: each parameter is its own column (label on top, control
+    // below). #mc-results-container is a full-width sibling of #panels
+    // (the chart row above it), not nested in the narrow sidebar — so
+    // these columns are sized to spread across that full width (CSS grid,
+    // auto-fit) rather than packing tight on the left.
+    const toolbar = el('div', 'mc-params-toolbar')
 
-    const filterRow = el('div', 'row')
-    const filterLabel = el('label')
-    filterLabel.textContent = 'Filter:'
+    this.runsInput = el('input')
+    this.runsInput.type = 'number'
+    this.runsInput.className = 'mc-number-input'
+    this.runsInput.min = '1'
+    this.runsInput.step = '1'
+    this.runsInput.value = String(DEFAULTS.nRuns)
+    toolbar.appendChild(this.makeField('Runs', this.runsInput,
+      'Number of independent realizations in this campaign. More runs make the NEES/NIS averages and ' +
+      'the histogram smoother, at a roughly linear cost in time.',
+    ))
+
     this.filterSelect = el('select')
     for (const [value, label] of [[MCFilterKind.Kf, 'KF'], [MCFilterKind.Ekf, 'EKF'], [MCFilterKind.Ukf, 'UKF']] as const) {
       const opt = el('option')
@@ -153,36 +161,65 @@ export class MCResultsPanel {
       this.filterSelect.appendChild(opt)
     }
     this.filterSelect.value = String(DEFAULTS.filter)
-    const filterInfo = makeInfoButton(
+    toolbar.appendChild(this.makeField('Filter', this.filterSelect,
       'Which filter this campaign runs, against the same noisy measurements each realization. KF is the ' +
       'intentionally-naive linearized baseline; EKF and UKF use the full nonlinear dynamics.',
-    )
-    filterRow.append(filterLabel, this.filterSelect, filterInfo)
+    ))
 
-    const durationRow = el('div', 'row')
-    const durationLabel = el('label')
-    durationLabel.textContent = 'Steps:'
     this.stepsInput = el('input')
     this.stepsInput.type = 'number'
     this.stepsInput.className = 'mc-number-input'
     this.stepsInput.min = '1'
     this.stepsInput.step = '1'
     this.stepsInput.value = String(DEFAULTS.nSteps)
-    const dtLabel = el('span')
-    dtLabel.textContent = '×'
+    toolbar.appendChild(this.makeField('Steps', this.stepsInput,
+      'Number of filter steps in one realization. Together with dt, sets how much simulated time one ' +
+      'run covers (steps × dt).',
+    ))
+
     this.dtInput = el('input')
     this.dtInput.type = 'number'
     this.dtInput.className = 'mc-number-input'
     this.dtInput.min = '0.1'
     this.dtInput.step = '0.1'
     this.dtInput.value = String(DEFAULTS.dt)
-    const dtUnit = el('span')
-    dtUnit.textContent = 's'
-    const durationInfo = makeInfoButton(
-      'Number of filter steps and the time between them. Together they set how much simulated time one ' +
-      'realization covers (steps × dt).',
-    )
-    durationRow.append(durationLabel, this.stepsInput, dtLabel, this.dtInput, dtUnit, durationInfo)
+    toolbar.appendChild(this.makeField('Step size (s)', this.dtInput,
+      'Simulated time between filter steps. Smaller values are finer-grained but need more steps to ' +
+      'cover the same total duration.',
+    ))
+
+    this.qPosInput = el('input')
+    this.qPosInput.type = 'number'
+    this.qPosInput.className = 'mc-number-input'
+    this.qPosInput.min = '0'
+    this.qPosInput.step = '0.1'
+    this.qPosInput.value = String(DEFAULTS.qPos)
+    toolbar.appendChild(this.makeField('Process noise: position (m)', this.qPosInput,
+      'Random position drift injected into the true trajectory every step, in addition to sensor noise ' +
+      '— separate from the Scenario Editor. Higher values mean a harder target for the filter to track.',
+    ))
+
+    this.qVelInput = el('input')
+    this.qVelInput.type = 'number'
+    this.qVelInput.className = 'mc-number-input'
+    this.qVelInput.min = '0'
+    this.qVelInput.step = '0.001'
+    this.qVelInput.value = String(DEFAULTS.qVel)
+    toolbar.appendChild(this.makeField('Process noise: velocity (m/s)', this.qVelInput,
+      'Same as the position process noise, but for velocity drift.',
+    ))
+
+    this.seedInput = el('input')
+    this.seedInput.type = 'number'
+    this.seedInput.className = 'mc-number-input'
+    this.seedInput.min = '0'
+    this.seedInput.step = '1'
+    this.seedInput.value = String(DEFAULTS.seed)
+    toolbar.appendChild(this.makeField('Random seed', this.seedInput,
+      "Seed for this campaign's random noise draws. The same seed reproduces an identical campaign every " +
+      'time; check Randomize (below) for a fresh draw each run.',
+    ))
+
     const durationReadoutRow = el('div', 'mc-duration-readout-row')
     this.durationReadout = el('span', 'mc-duration-readout')
     this.durationReadout.textContent = formatDurationReadout(DEFAULTS.nSteps, DEFAULTS.dt)
@@ -195,40 +232,7 @@ export class MCResultsPanel {
     this.stepsInput.addEventListener('input', refreshDurationReadout)
     this.dtInput.addEventListener('input', refreshDurationReadout)
 
-    const noiseRow = el('div', 'row')
-    const noiseLabel = el('label')
-    noiseLabel.textContent = 'Proc. noise:'
-    this.qPosInput = el('input')
-    this.qPosInput.type = 'number'
-    this.qPosInput.className = 'mc-number-input'
-    this.qPosInput.min = '0'
-    this.qPosInput.step = '0.1'
-    this.qPosInput.value = String(DEFAULTS.qPos)
-    const qPosUnit = el('span')
-    qPosUnit.textContent = 'm'
-    this.qVelInput = el('input')
-    this.qVelInput.type = 'number'
-    this.qVelInput.className = 'mc-number-input'
-    this.qVelInput.min = '0'
-    this.qVelInput.step = '0.001'
-    this.qVelInput.value = String(DEFAULTS.qVel)
-    const qVelUnit = el('span')
-    qVelUnit.textContent = 'm/s'
-    const noiseInfo = makeInfoButton(
-      'Random drift injected into the true trajectory every step, in addition to sensor noise — separate ' +
-      'from the Scenario Editor. Higher values mean a harder target for the filter to track.',
-    )
-    noiseRow.append(noiseLabel, this.qPosInput, qPosUnit, this.qVelInput, qVelUnit, noiseInfo)
-
-    const seedRow = el('div', 'row')
-    const seedLabel = el('label')
-    seedLabel.textContent = 'Seed:'
-    this.seedInput = el('input')
-    this.seedInput.type = 'number'
-    this.seedInput.className = 'mc-number-input'
-    this.seedInput.min = '0'
-    this.seedInput.step = '1'
-    this.seedInput.value = String(DEFAULTS.seed)
+    const actionRow = el('div', 'row')
     const randomizeLabelEl = el('label')
     this.randomizeCheckbox = el('input')
     this.randomizeCheckbox.type = 'checkbox'
@@ -236,17 +240,11 @@ export class MCResultsPanel {
     this.randomizeCheckbox.addEventListener('change', () => {
       this.seedInput.disabled = this.randomizeCheckbox.checked
     })
-    const seedInfo = makeInfoButton(
-      "Seed for this campaign's random noise draws. The same seed reproduces an identical campaign every " +
-      'time; check Randomize for a fresh draw each run.',
-    )
-    seedRow.append(seedLabel, this.seedInput, randomizeLabelEl, seedInfo)
-
+    const seedInfo = makeInfoButton('Draw a fresh random seed for every campaign instead of reusing the Seed field above.')
     this.runButton = el('button')
     this.runButton.textContent = '▶ Run MC'
     this.runButton.addEventListener('click', () => this.onRunMC())
-    const runRow = el('div', 'row')
-    runRow.appendChild(this.runButton)
+    actionRow.append(randomizeLabelEl, seedInfo, this.runButton)
     // Monte Carlo's initial condition is a snapshot of the live
     // Simulation's true state (engine/include/wasm_api.hpp's
     // x_true_initial_), which is only populated by init_scenario() — sent
@@ -300,10 +298,8 @@ export class MCResultsPanel {
     nisCard.append(nisTitle, nisCanvas)
 
     chartsRow.append(histogramCard, rmsCard, neesCard, nisCard)
-    body.append(
-      runsRow, filterRow, durationRow, durationReadoutRow, noiseRow, seedRow, runRow,
-      this.statusLine, this.progressTrack, chartsRow,
-    )
+
+    body.append(toolbar, durationReadoutRow, actionRow, this.statusLine, this.progressTrack, chartsRow)
     details.appendChild(body)
     container.appendChild(details)
 
@@ -312,21 +308,17 @@ export class MCResultsPanel {
     this.nisChart = this.makeBoundedLineChart(nisCanvas)
   }
 
-  private makeNumberRow(
-    labelText: string,
-    opts: { min: string; step: string; value: string; explanation: string },
-  ): { row: HTMLElement; input: HTMLInputElement } {
-    const row = el('div', 'row')
+  // One toolbar column: a small label (+ info button) on top, the given
+  // control (input/select) below. control is built by the caller since
+  // each one needs different type/min/step/options wiring.
+  private makeField(labelText: string, control: HTMLElement, explanation: string): HTMLElement {
+    const field = el('div', 'mc-field')
+    const labelRow = el('div', 'mc-field-label')
     const label = el('label')
     label.textContent = labelText
-    const input = el('input')
-    input.type = 'number'
-    input.className = 'mc-number-input'
-    input.min = opts.min
-    input.step = opts.step
-    input.value = opts.value
-    row.append(label, input, makeInfoButton(opts.explanation))
-    return { row, input }
+    labelRow.append(label, makeInfoButton(explanation))
+    field.append(labelRow, control)
+    return field
   }
 
   private makeBarChart(canvas: HTMLCanvasElement): Chart {

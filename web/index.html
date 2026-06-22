@@ -528,30 +528,45 @@
     .mc-panel summary::before { content: '▸ '; }
     .mc-panel[open] summary::before { content: '▾ '; }
     .mc-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
-    /* Mirrors .scenario-editor .row exactly, scoped to the MC panel
-       instead — same row pattern (label, field(s), info button), just a
-       different parent selector since .row itself is scenario-editor-only. */
+    /* Used only by the action row (Randomize checkbox + Run MC) now — the
+       parameter fields themselves moved to .mc-params-toolbar below. */
     .mc-panel .row { display: flex; align-items: center; gap: 8px; }
-    .mc-panel .row label { color: var(--text-muted); min-width: 72px; font-size: 12px; }
-    .mc-panel .row select { flex: 0 0 auto; padding: 4px 6px; font-size: 12px; }
     /* All of the MC panel's numeric inputs (runs/steps/dt/process noise/
-       seed) share one style — narrow, monospace, matches
-       .sim-speed-number/.gps-sigma-number's existing precedent exactly. */
+       seed) share one style. Sized to fill their grid column (see
+       .mc-params-toolbar below), not the fixed 56px width
+       .sim-speed-number/.gps-sigma-number use for a single inline value —
+       this panel is full-width (a sibling of #panels, not nested in the
+       narrow sidebar), so these fields have real room to use. */
     .mc-number-input {
-      width: 56px;
-      padding: 4px 6px;
-      font-size: 12px;
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 14px;
       font-family: var(--font-mono);
       background: var(--surface-2);
       color: var(--text);
       border: 1px solid var(--border-strong);
       border-radius: 6px;
-      flex: 0 0 auto;
+      box-sizing: border-box;
     }
     .mc-number-input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
     .mc-number-input:disabled { opacity: 0.5; }
-    .mc-duration-readout-row { padding-left: 80px; margin-top: -4px; }
-    .mc-duration-readout { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
+    .mc-duration-readout-row { margin-top: -4px; }
+    .mc-duration-readout { font-size: 12px; color: var(--text-faint); font-family: var(--font-mono); }
+    /* Each parameter is its own column (label above, control below).
+       auto-fit + minmax spreads them across this panel's full width
+       (growing past their minimum when there's room, same as #panels'
+       chart grid above it) instead of packing tight on the left, and
+       still wraps to fewer columns on a narrow viewport. See
+       mc_results.ts's makeField()/toolbar construction comment. */
+    .mc-params-toolbar {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 16px 24px;
+    }
+    .mc-field { display: flex; flex-direction: column; gap: 6px; }
+    .mc-field-label { display: flex; align-items: center; gap: 4px; }
+    .mc-field-label label { color: var(--text-muted); font-size: 13px; }
+    .mc-field select { width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; }
     /* Live "N / total realizations" readout — width set from JS each poll,
        not CSS-animated, since it must track the actual atomic counter
        (mc_progress_reader.ts), not a guessed duration. */
