@@ -1,6 +1,6 @@
 # OrbitForge
 
-Real satellite orbits. Real Kalman filters. Runs entirely in the browser, no server.
+Real satellite orbits and Kalman filters. Runs entirely in the browser, no server.
 
 **Live Site:** [orbitforge.dev](https://orbitforge.dev)
 
@@ -18,7 +18,7 @@ The entire simulation, all three filters, and the sensor models are **C++17 comp
 - Three filters running concurrently against identical measurements: **KF** (linear baseline), **EKF**, **UKF**
 - 6DOF attitude estimation: 12-state multiplicative EKF/UKF, rigid body dynamics, gyroscope + magnetometer
 - Fault injection: GPS spike, GPS dropout, unmodeled maneuver, drag coefficient error, persistent GPS bias
-- Configurable Monte Carlo campaigns: filter choice, run count, run duration, process noise, fixed or random seed
+- Configurable Monte Carlo campaigns: filter choice, run count & duration, process noise, fixed or random seed
 - NEES / NIS consistency charts against theoretical chi-squared bounds
 - WebGL2 3D view: orbit path, true attitude, covariance ellipsoids
 - Real-time Chart.js panels for position error, velocity error, covariance trace, NIS
@@ -81,15 +81,6 @@ npm run dev
 ```
 
 The dev server sets the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers `SharedArrayBuffer` requires. Without them the WASM module will fail to load with a cross-origin isolation error.
-
-## Testing
-
-| Layer | Command | Coverage |
-|---|---|---|
-| Engine | `ctest --output-on-failure` | 112 tests, clean under ASan, UBSan, and ThreadSanitizer |
-| Web | `npx playwright test` (inside `web/`) | 8 end-to-end browser tests: run/pause/reset lifecycle, Monte Carlo |
-
-CI runs both on every push and pull request.
 
 ## Project Structure
 
