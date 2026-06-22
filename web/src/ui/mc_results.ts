@@ -205,7 +205,7 @@ export class MCResultsPanel {
     this.qVelInput.min = '0'
     this.qVelInput.step = '0.001'
     this.qVelInput.value = String(DEFAULTS.qVel)
-    toolbar.appendChild(this.makeField('Process noise: velocity (m/s)', this.qVelInput,
+    toolbar.appendChild(this.makeField('Process noise: speed (m/s)', this.qVelInput,
       'Same as the position process noise, but for velocity drift.',
     ))
 
@@ -215,10 +215,21 @@ export class MCResultsPanel {
     this.seedInput.min = '0'
     this.seedInput.step = '1'
     this.seedInput.value = String(DEFAULTS.seed)
-    toolbar.appendChild(this.makeField('Random seed', this.seedInput,
+    const seedField = this.makeField('Random seed', this.seedInput,
       "Seed for this campaign's random noise draws. The same seed reproduces an identical campaign every " +
-      'time; check Randomize (below) for a fresh draw each run.',
-    ))
+      'time; check Randomize below for a fresh draw each run.',
+    )
+    const randomizeRow = el('div', 'mc-randomize-row')
+    const randomizeLabelEl = el('label')
+    this.randomizeCheckbox = el('input')
+    this.randomizeCheckbox.type = 'checkbox'
+    randomizeLabelEl.append(this.randomizeCheckbox, document.createTextNode(' Randomize'))
+    this.randomizeCheckbox.addEventListener('change', () => {
+      this.seedInput.disabled = this.randomizeCheckbox.checked
+    })
+    randomizeRow.appendChild(randomizeLabelEl)
+    seedField.appendChild(randomizeRow)
+    toolbar.appendChild(seedField)
 
     const durationReadoutRow = el('div', 'mc-duration-readout-row')
     this.durationReadout = el('span', 'mc-duration-readout')
@@ -233,18 +244,10 @@ export class MCResultsPanel {
     this.dtInput.addEventListener('input', refreshDurationReadout)
 
     const actionRow = el('div', 'row')
-    const randomizeLabelEl = el('label')
-    this.randomizeCheckbox = el('input')
-    this.randomizeCheckbox.type = 'checkbox'
-    randomizeLabelEl.append(this.randomizeCheckbox, document.createTextNode(' Randomize'))
-    this.randomizeCheckbox.addEventListener('change', () => {
-      this.seedInput.disabled = this.randomizeCheckbox.checked
-    })
-    const seedInfo = makeInfoButton('Draw a fresh random seed for every campaign instead of reusing the Seed field above.')
     this.runButton = el('button')
     this.runButton.textContent = '▶ Run MC'
     this.runButton.addEventListener('click', () => this.onRunMC())
-    actionRow.append(randomizeLabelEl, seedInfo, this.runButton)
+    actionRow.appendChild(this.runButton)
     // Monte Carlo's initial condition is a snapshot of the live
     // Simulation's true state (engine/include/wasm_api.hpp's
     // x_true_initial_), which is only populated by init_scenario() — sent
