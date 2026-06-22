@@ -49,6 +49,22 @@ const TEXT_MUTED = 'rgba(136, 145, 168, 0.9)'
 const GRID_COLOR = 'rgba(255, 255, 255, 0.06)'
 const HISTOGRAM_BINS = 15
 
+// Same rgb values as renderer/panels.ts's FILTER_COLORS (and the
+// normalized equivalents in renderer/gl_utils.ts's FILTER_COLOR_RGB used
+// for the 3D scene) — one filter runs per MC campaign (the Filter select
+// above), so the NEES/NIS line should read as "that filter's color"
+// consistently with every other place a filter's color shows up in the app.
+const MC_FILTER_LINE_COLORS: Record<MCFilterKind, string> = {
+  [MCFilterKind.Kf]: 'rgb(91, 140, 255)',
+  [MCFilterKind.Ekf]: 'rgb(45, 217, 196)',
+  [MCFilterKind.Ukf]: 'rgb(247, 169, 62)',
+}
+const MC_FILTER_LABELS: Record<MCFilterKind, string> = {
+  [MCFilterKind.Kf]: 'KF',
+  [MCFilterKind.Ekf]: 'EKF',
+  [MCFilterKind.Ukf]: 'UKF',
+}
+
 const DEFAULTS = {
   nRuns: 500,
   filter: MCFilterKind.Ekf,
@@ -147,6 +163,10 @@ export class MCResultsPanel {
   // label the RMS table / NEES/NIS chart x-axes correctly (was hardcoded
   // to 10.0 back when dt itself was hardcoded).
   private lastDt = DEFAULTS.dt
+  // Filter actually used by the in-flight/last campaign — same reason as
+  // lastDt above (MCStats doesn't echo it back), needed by handleResults()
+  // to color the NEES/NIS lines to match.
+  private lastFilter: MCFilterKind = DEFAULTS.filter
   // Whether ScenarioEditor.getConfig() would currently succeed (a
   // satellite/TLE is loaded) — gates the button itself, same signal and
   // wording RunControls' own runEnabled uses. Independent of whether
@@ -193,10 +213,10 @@ export class MCResultsPanel {
     ))
 
     this.filterSelect = el('select')
-    for (const [value, label] of [[MCFilterKind.Kf, 'KF'], [MCFilterKind.Ekf, 'EKF'], [MCFilterKind.Ukf, 'UKF']] as const) {
+    for (const value of [MCFilterKind.Kf, MCFilterKind.Ekf, MCFilterKind.Ukf]) {
       const opt = el('option')
       opt.value = String(value)
-      opt.textContent = label
+      opt.textContent = MC_FILTER_LABELS[value]
       this.filterSelect.appendChild(opt)
     }
     this.filterSelect.value = String(DEFAULTS.filter)
@@ -444,6 +464,7 @@ export class MCResultsPanel {
 
     this.targetNRuns = nRuns
     this.lastDt = dt
+    this.lastFilter = filter
     this.running = true
     this.updateRunButtonState()
     this.progressTrack.style.display = ''
@@ -519,6 +540,8 @@ export class MCResultsPanel {
   private updateBoundedChart(chart: Chart, labels: string[], values: number[], lower: number, upper: number): void {
     chart.data.labels = labels
     chart.data.datasets[0]!.data = values
+    chart.data.datasets[0]!.borderColor = MC_FILTER_LINE_COLORS[this.lastFilter]
+    chart.data.datasets[0]!.label = MC_FILTER_LABELS[this.lastFilter]
     chart.data.datasets[1]!.data = labels.map(() => lower)
     chart.data.datasets[2]!.data = labels.map(() => upper)
     chart.update()
