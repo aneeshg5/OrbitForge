@@ -518,6 +518,15 @@ void run_monte_carlo(int n_runs, int seed) {
     orbitforge::run_monte_carlo(n_runs > 0 ? static_cast<size_t>(n_runs) : 0, seed);
 }
 
+// Address of mc_progress_counter()'s singleton, stable from program start —
+// callers fetch this once (not per-campaign) and poll it directly off the
+// shared WASM heap via Atomics while run_monte_carlo()'s blocking ccall is
+// in flight on the worker thread; see worker.ts/main.ts for the read side.
+EMSCRIPTEN_KEEPALIVE
+uintptr_t get_mc_progress_ptr() {
+    return reinterpret_cast<uintptr_t>(&orbitforge::monte_carlo::mc_progress_counter());
+}
+
 EMSCRIPTEN_KEEPALIVE
 int get_mc_n_steps() { return static_cast<int>(orbitforge::get_mc_results().rms_pos.size()); }
 

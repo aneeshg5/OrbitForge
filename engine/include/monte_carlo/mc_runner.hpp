@@ -1,6 +1,8 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -58,8 +60,19 @@ struct MCStats {
 // Runs cfg.n_runs independent realizations of the configured filter,
 // distributing runs across a k_mc_threads-thread pool as contiguous slices
 // (no work-stealing — runs are equal cost). Returns per-step statistics
-// merged across all runs and threads.
+// merged across all runs and threads. Resets mc_progress_counter() to 0 on
+// entry and the k_mc_threads worker threads each increment it (relaxed) as
+// their slice's individual runs complete, so a caller on another thread can
+// poll "how many of n_runs are done" while this call is still blocking.
 MCStats run_monte_carlo(const MCConfig& cfg);
+
+// Count of individual realizations completed by the in-flight (or most
+// recent) run_monte_carlo() call. Meyers-singleton function-local static —
+// same pattern as wasm_api.cpp's global_simulation() — so its address is
+// stable for the life of the program and a caller (wasm_api.cpp's
+// get_mc_progress_ptr()) can hand that address to JS once and have it stay
+// valid across any number of campaigns.
+std::atomic<uint32_t>& mc_progress_counter();
 
 // Wilson-Hilferty chi-squared quantile approximation (math.md §6):
 //   chi2(dof, p) ~= dof * (1 - 2/(9*dof) + z_p*sqrt(2/(9*dof)))^3

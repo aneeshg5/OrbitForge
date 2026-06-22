@@ -46,6 +46,11 @@ export interface RingBufferReadyMessage {
     sharedArrayBuffer: SharedArrayBuffer
     ringBufferPtr: number
     ringBufferCapacity: number
+    // Address of mc_runner.hpp's mc_progress_counter() singleton — stable
+    // for the program's lifetime, so this is fetched once here (piggybacking
+    // on the message that already carries the shared heap reference) rather
+    // than re-queried per Monte Carlo campaign. See McProgressReader's doc.
+    mcProgressPtr: number
   }
 }
 export interface McResultsMessage {
@@ -103,6 +108,7 @@ function initScenario(module: OrbitForgeModule, cfg: ScenarioConfig): void {
 
   const ringBufferPtr = module.ccall('get_ring_buffer_ptr', 'number', [], []) as number
   const ringBufferCapacity = module.ccall('get_ring_buffer_capacity', 'number', [], []) as number
+  const mcProgressPtr = module.ccall('get_mc_progress_ptr', 'number', [], []) as number
 
   // The WASM heap is a SharedArrayBuffer because the module is built with
   // pthreads (-sUSE_PTHREADS=1) — required for cross-thread memory access
@@ -113,6 +119,7 @@ function initScenario(module: OrbitForgeModule, cfg: ScenarioConfig): void {
       sharedArrayBuffer: module.HEAPF64.buffer as SharedArrayBuffer,
       ringBufferPtr,
       ringBufferCapacity,
+      mcProgressPtr,
     },
   }
   self.postMessage(response)

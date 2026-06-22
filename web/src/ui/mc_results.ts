@@ -64,10 +64,19 @@ export class MCResultsPanel {
   private readonly runsInput: HTMLInputElement
   private readonly runsLabel: HTMLSpanElement
   private readonly statusLine: HTMLDivElement
+  private readonly progressTrack: HTMLDivElement
+  private readonly progressFill: HTMLDivElement
+  private readonly runButton: HTMLButtonElement
   private readonly histogramChart: Chart
   private readonly neesChart: Chart
   private readonly nisChart: Chart
   private readonly rmsTableBody: HTMLTableSectionElement
+  // Set when a campaign is dispatched, cleared once its 'mc_results'
+  // response arrives — main.ts's render loop checks isRunning() every
+  // frame to decide whether to keep polling the progress counter (see
+  // McProgressReader) at all.
+  private running = false
+  private targetNRuns = 0
 
   constructor(container: HTMLElement, options: MCResultsOptions) {
     this.postToWorker = options.postToWorker
@@ -93,12 +102,16 @@ export class MCResultsPanel {
     this.runsInput.addEventListener('input', () => {
       this.runsLabel.textContent = this.runsInput.value
     })
-    const runButton = el('button')
-    runButton.textContent = '▶ Run MC'
-    runButton.addEventListener('click', () => this.onRunMC())
-    runsRow.append(runsLabelText, this.runsInput, this.runsLabel, runButton)
+    this.runButton = el('button')
+    this.runButton.textContent = '▶ Run MC'
+    this.runButton.addEventListener('click', () => this.onRunMC())
+    runsRow.append(runsLabelText, this.runsInput, this.runsLabel, this.runButton)
 
     this.statusLine = el('div', 'status-line')
+    this.progressTrack = el('div', 'mc-progress-track')
+    this.progressFill = el('div', 'mc-progress-fill')
+    this.progressTrack.appendChild(this.progressFill)
+    this.progressTrack.style.display = 'none'
 
     const chartsRow = el('div', 'mc-charts-row')
 
@@ -137,7 +150,7 @@ export class MCResultsPanel {
     nisCard.append(nisTitle, nisCanvas)
 
     chartsRow.append(histogramCard, rmsCard, neesCard, nisCard)
-    body.append(runsRow, this.statusLine, chartsRow)
+    body.append(runsRow, this.statusLine, this.progressTrack, chartsRow)
     details.appendChild(body)
     container.appendChild(details)
 
@@ -204,12 +217,33 @@ export class MCResultsPanel {
 
   private onRunMC(): void {
     const nRuns = Number(this.runsInput.value)
-    this.statusLine.textContent = `Running ${nRuns} realizations...`
+    this.targetNRuns = nRuns
+    this.running = true
+    this.runButton.disabled = true
+    this.progressTrack.style.display = ''
+    this.updateProgress(0)
     this.postToWorker({ type: 'run_monte_carlo', payload: { nRuns, seed: -1 } })
+  }
+
+  /** True between dispatching a campaign and its 'mc_results' response — main.ts's render loop polls progress only while this holds. */
+  isRunning(): boolean {
+    return this.running
+  }
+
+  /** Called by main.ts every render frame while isRunning(), with the live mc_progress_counter() value. */
+  updateProgress(completed: number): void {
+    if (!this.running) return
+    const clamped = Math.min(completed, this.targetNRuns)
+    this.statusLine.textContent = `Running ${clamped} / ${this.targetNRuns} realizations...`
+    const pct = this.targetNRuns > 0 ? (100 * clamped) / this.targetNRuns : 0
+    this.progressFill.style.width = `${pct}%`
   }
 
   /** Called by main.ts when a 'mc_results' WorkerResponse arrives. */
   handleResults(stats: MCStats): void {
+    this.running = false
+    this.runButton.disabled = false
+    this.progressTrack.style.display = 'none'
     const nRuns = stats.finalPosErrPerRun.length
     this.statusLine.textContent = `Done — ${nRuns} runs, ${stats.rmsPosPerStep.length} steps.`
 

@@ -3,6 +3,7 @@
 // panels to the ring buffer, and drive a 60 fps render loop.
 
 import { RingReader } from './bridge/ring_reader.js'
+import { McProgressReader } from './bridge/mc_progress_reader.js'
 import type { StateFrame } from './bridge/wasm_types.js'
 import type { WorkerRequest, WorkerResponse } from './worker.js'
 import { EarthRenderer } from './renderer/earth.js'
@@ -390,6 +391,8 @@ function startRenderLoop(
   camera: OrbitCamera,
   getRingReader: () => RingReader | undefined,
   getRunControls: () => RunControls | undefined,
+  getMcProgress: () => McProgressReader | undefined,
+  getMcResultsPanel: () => MCResultsPanel | undefined,
 ): { resetView: () => void; getCurrentSimTimeSec: () => number } {
   let latestFrame: StateFrame | undefined
 
@@ -418,6 +421,20 @@ function startRenderLoop(
     camera.update()
     renderScene(scene, camera, latestFrame)
     getRunControls()?.checkAutoStop(latestFrame ? latestFrame.simTime : 0)
+
+    // Monte Carlo progress: run_monte_carlo()'s ccall blocks the worker
+    // thread for the whole campaign (worker.ts's doc), so this is the only
+    // way to show live progress — the main thread is never blocked by the
+    // worker and polls mc_progress_counter() directly off the shared WASM
+    // heap (McProgressReader). Only while a campaign is actually running,
+    // both to avoid pointless reads and because the pointer isn't valid
+    // until the first 'ring_buffer_ready' message arrives.
+    const mcResultsPanel = getMcResultsPanel()
+    if (mcResultsPanel?.isRunning()) {
+      const progress = getMcProgress()
+      if (progress) mcResultsPanel.updateProgress(progress.read())
+    }
+
     requestAnimationFrame(tick)
   }
   requestAnimationFrame(tick)
@@ -451,7 +468,15 @@ async function main(): Promise<void> {
   // pattern just below.
   let runControls: RunControls | undefined
   let ringReader: RingReader | undefined
-  const { resetView, getCurrentSimTimeSec } = startRenderLoop(scene, camera, () => ringReader, () => runControls)
+  let mcProgress: McProgressReader | undefined
+  // mcResults itself (not just the ring buffer/progress reader) needs a
+  // forward reference too — tick() polls isRunning()/updateProgress() on
+  // it every frame but is wired up before MCResultsPanel is constructed
+  // below, the same ordering constraint runControls already has.
+  let mcResults: MCResultsPanel | undefined
+  const { resetView, getCurrentSimTimeSec } = startRenderLoop(
+    scene, camera, () => ringReader, () => runControls, () => mcProgress, () => mcResults,
+  )
 
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
   const postToWorker = (msg: WorkerRequest): void => {
@@ -460,14 +485,15 @@ async function main(): Promise<void> {
   }
 
   const mcContainer = document.getElementById('mc-results-container')!
-  const mcResults = new MCResultsPanel(mcContainer, { postToWorker })
+  mcResults = new MCResultsPanel(mcContainer, { postToWorker })
 
   worker.addEventListener('message', (e: MessageEvent<WorkerResponse>) => {
     if (e.data.type === 'ring_buffer_ready') {
-      const { sharedArrayBuffer, ringBufferPtr, ringBufferCapacity } = e.data.payload
+      const { sharedArrayBuffer, ringBufferPtr, ringBufferCapacity, mcProgressPtr } = e.data.payload
       ringReader = new RingReader(sharedArrayBuffer, ringBufferPtr, ringBufferCapacity)
+      mcProgress = new McProgressReader(sharedArrayBuffer, mcProgressPtr)
     } else if (e.data.type === 'mc_results') {
-      mcResults.handleResults(e.data.payload)
+      mcResults!.handleResults(e.data.payload)
     }
   })
 

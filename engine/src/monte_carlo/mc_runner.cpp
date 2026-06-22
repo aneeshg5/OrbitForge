@@ -183,6 +183,12 @@ void run_slice(const MCConfig& cfg, size_t begin, size_t end, PartialSums& sums)
             case FilterKind::ukf: run_one<filters::UnscentedKalmanFilter, 12, 6>(cfg, run_seed, sums, final_pos_err); break;
         }
         sums.final_pos_err[run - begin] = final_pos_err;
+        // Called from k_mc_threads concurrent threads, each on its own
+        // disjoint slice — fetch_add is the only cross-thread interaction
+        // in this entire function, so relaxed ordering is enough (a
+        // progress readout has no other memory it needs to stay
+        // consistent with).
+        mc_progress_counter().fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -194,7 +200,14 @@ double chi_squared_quantile(double p, double dof) {
     return dof * term * term * term;
 }
 
+std::atomic<uint32_t>& mc_progress_counter() {
+    static std::atomic<uint32_t> counter{0};
+    return counter;
+}
+
 MCStats run_monte_carlo(const MCConfig& cfg) {
+    mc_progress_counter().store(0, std::memory_order_relaxed);
+
     const int n_steps = cfg.n_steps;
     const size_t n    = cfg.n_runs;
     const size_t base = n / k_mc_threads;

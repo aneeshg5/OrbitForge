@@ -129,6 +129,44 @@ TEST(McRunner, HandlesRunCountNotDivisibleByThreadCount) {
     for (double v : stats.nees) EXPECT_GT(v, 0.0);
 }
 
+// mc_progress_counter() lets a poller on another thread report "N of
+// n_runs done" while run_monte_carlo() is still blocking its caller (see
+// wasm_api.cpp's get_mc_progress_ptr()). By the time run_monte_carlo()
+// returns, every individual realization across all k_mc_threads slices
+// must have incremented it exactly once — not dropped (a thread's slice
+// silently skipped) and not double-counted (the same run incrementing
+// twice), either of which would make the live readout under- or
+// over-shoot n_runs and never settle.
+TEST(McRunner, ProgressCounterReachesNRunsExactly) {
+    MCConfig cfg;
+    cfg.n_runs = 17;  // not divisible by k_mc_threads(4) — uneven slices
+    cfg.n_steps = 20;
+    cfg.x0 = iss_state();
+    cfg.filter = FilterKind::ekf;
+
+    run_monte_carlo(cfg);
+    EXPECT_EQ(mc_progress_counter().load(), 17u);
+}
+
+// A second, smaller campaign must not start from the first campaign's
+// leftover count — run_monte_carlo() resets the counter to 0 on entry, not
+// just at construction, so a poller watching a fresh campaign sees it
+// climb from 0, not start already-elevated or overshoot the new n_runs.
+TEST(McRunner, ProgressCounterResetsOnEachNewCampaign) {
+    MCConfig cfg;
+    cfg.n_steps = 20;
+    cfg.x0 = iss_state();
+    cfg.filter = FilterKind::ekf;
+
+    cfg.n_runs = 12;
+    run_monte_carlo(cfg);
+    ASSERT_EQ(mc_progress_counter().load(), 12u);
+
+    cfg.n_runs = 5;
+    run_monte_carlo(cfg);
+    EXPECT_EQ(mc_progress_counter().load(), 5u);
+}
+
 TEST(McRunner, KalmanFilterKindRunsWithoutCrashing) {
     MCConfig cfg;
     cfg.n_runs = 8;
