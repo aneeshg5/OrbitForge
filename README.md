@@ -100,15 +100,4 @@ docs/        Architecture, math derivations, benchmarks
 scripts/     Build scripts (WASM build, native benchmarks)
 ```
 
-## Tech Stack
-
-- **Engine:** C++17, Eigen, GoogleTest, Emscripten
-- **Frontend:** TypeScript, Vite, WebGL2, Chart.js
-- **Testing:** GoogleTest + sanitizers (engine), Playwright (browser)
-- **CI/CD:** GitHub Actions, Cloudflare Pages
-
-## Status
-
-Engine and frontend are feature complete through 6DOF attitude estimation and configurable Monte Carlo. Deployment is wired up in CI but not live yet on orbitforge.dev, pending a Cloudflare account on my end.
-
 Further reading: [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md), [docs/benchmarks.md](docs/benchmarks.md).
