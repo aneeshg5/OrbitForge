@@ -4,7 +4,7 @@ Real satellite orbits. Real Kalman filters. Runs entirely in the browser, no ser
 
 **Live Site:** [orbitforge.dev](https://orbitforge.dev)
 
-![OrbitForge main view](docs/screenshots/main-view.png)
+![OrbitForge demo](docs/demo.gif)
 
 ## Overview
 
