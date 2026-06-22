@@ -1,6 +1,6 @@
 # OrbitForge
 
-Real satellite orbits, real Kalman filters, running entirely in your browser.
+Real satellite orbits. Real Kalman filters. Runs entirely in the browser, no server.
 
 [orbitforge.dev](https://orbitforge.dev)
 
@@ -8,64 +8,109 @@ Real satellite orbits, real Kalman filters, running entirely in your browser.
 
 ![OrbitForge main view](docs/screenshots/main-view.png)
 
-## What this is
+## Overview
 
-Paste in a TLE for any tracked object in orbit, or pick one from the live CelesTrak feed, and watch three different filters estimate its position and attitude from noisy sensor data, in real time, with nothing to install and no backend server. The orbital mechanics, the filters, and the sensor models are all C++ compiled to WebAssembly. The browser only handles rendering.
+OrbitForge loads a real satellite's orbital elements (TLE) and runs three state estimation filters against it side by side: a linear **KF**, an **EKF**, and a **UKF**. All three see the same noisy sensor data and try to recover the satellite's true position and attitude. You can inject faults mid-run, compare how each filter responds, and run full Monte Carlo consistency campaigns.
 
-I built this because I wanted to actually watch filter divergence happen instead of just reading about it in a textbook. Orekit will run an EKF against a real orbit, but it's a Java library, not something you hand to someone and say "click this." nyx does orbital propagation in WASM but has no state estimation at all, just propagation. orbidet and poliastro are Python notebooks, correct but static, and not something you'd show a non-technical person. None of the existing tools let you inject a fault mid-run and watch three filters respond to it differently.
+The entire simulation, all three filters, and the sensor models are **C++17 compiled to WebAssembly**. The browser only renders.
 
-## The actual engineering problem
+## Features
 
-The interesting part of this project isn't the orbital mechanics, it's getting a 100Hz physics simulation, three Kalman filters, and a Monte Carlo engine to run inside a browser tab without freezing the UI thread.
+- Live TLE feed from CelesTrak, or paste your own
+- Three filters running concurrently against identical measurements: **KF** (linear baseline), **EKF**, **UKF**
+- 6DOF attitude estimation: 12-state multiplicative EKF/UKF, rigid body dynamics, gyroscope + magnetometer
+- Fault injection: GPS spike, GPS dropout, unmodeled maneuver, drag coefficient error, persistent GPS bias
+- Configurable Monte Carlo campaigns: filter choice, run count, run duration, process noise, fixed or random seed
+- NEES / NIS consistency charts against theoretical chi-squared bounds
+- WebGL2 3D view: orbit path, true attitude, covariance ellipsoids
+- Real-time Chart.js panels for position error, velocity error, covariance trace, NIS
 
-The simulation runs on its own Web Worker, ticking at a fixed 100Hz independent of how fast the browser can actually render. Every tick it writes a snapshot of the current state, true trajectory, all three filter estimates, covariances, NIS, into a fixed-size ring buffer backed by a SharedArrayBuffer. The render loop reads out of that buffer at 60fps. Producer and consumer are different threads and never block each other: the ring buffer uses atomic head and tail pointers, padded onto separate cache lines so the two threads aren't invalidating each other's cache line on every push and pop.
+## Architecture
 
-Monte Carlo campaigns are the other place this mattered. Running 5000 realizations of a filter sequentially in JavaScript would be unusably slow. The campaign instead gets split across a 4-thread pool inside WASM, real OS threads via Emscripten pthreads, so a 5000-run, 500-step campaign (2.5 million filter updates) finishes in under two seconds. That call blocks the worker thread for its entire duration, so I added a separate atomic counter that the main thread polls directly off the shared heap, letting the UI show live progress without waiting on a response message from the worker.
-
-## The filters
-
-Three filters run side by side against the same noisy measurements:
-
-- **KF**: a linear Kalman filter, position and velocity only, linearized around a fixed reference orbit. It's deliberately the worst filter here. Real orbits curve, the KF's linear model can't keep up, and watching it diverge over time is the entire point of including it: it's the control group.
-- **EKF**: extended Kalman filter, 12-state (attitude error, angular velocity, position, velocity), using a multiplicative error-state formulation for attitude so the filter never has to linearize through a four-parameter quaternion's unit-norm constraint.
-- **UKF**: the same 12-state model as the EKF, but propagated through unscented sigma points instead of an analytic Jacobian, in square-root form so the covariance can't drift non-positive-definite from floating point error.
-
-KF never got a 6DOF upgrade. That was a deliberate decision, not a missing feature. Giving it an attitude estimate would mean building a second, separately bad linearization just so all three panels look symmetric, and it would muddy the actual story being told (is it diverging because of orbital or attitude linearization?). It stays exactly as naive as it always was.
-
-## What's modeled
-
-True trajectory propagation uses RK4 with J2 oblateness, atmospheric drag, and solar radiation pressure, each individually toggleable. Attitude follows torque-free rigid body rotation under Euler's equation. Sensors are GPS (position, ECI to ECEF), a gyroscope, and a magnetometer using an IGRF dipole approximation, each with configurable noise. None of this is meant to replace GMAT or a real flight dynamics suite. Gravity is J2 only, not full spherical harmonics, and the atmosphere model is a 7-band exponential fit, not NRLMSISE-00. Every Jacobian used by the EKF and UKF is derived by hand in docs/math.md, partly so I could check my own work before trusting the filter output.
-
-## Fault injection
-
-You can inject a GPS spike, a GPS dropout, an unmodeled maneuver, a drag coefficient error, or a persistent GPS bias at a chosen point in simulated time, and watch the three filters respond differently. The fault only changes what the filter measures, never the true trajectory, which is what actually makes the comparison meaningful. You're looking at three different estimates of the same ground truth, not three different simulations.
-
-## Monte Carlo
-
-Beyond a single run, you can launch a full consistency campaign: choose the filter, the number of realizations, how many steps each one runs and at what timestep, the process noise, and whether the random seed is fixed or different every time. Results come back as a final position error histogram, an RMS error table, and NEES and NIS consistency charts against their theoretical chi-squared bounds, which is the actual question Monte Carlo answers: is the filter's reported uncertainty trustworthy on average, not just in one lucky or unlucky run.
-
-## Running it
-
-Engine tests, native, no Emscripten required:
+The simulation runs on a dedicated Web Worker at a fixed **100 Hz**, independent of render rate. Each tick writes a state snapshot into a lock-free ring buffer backed by a `SharedArrayBuffer`. The main thread reads from that buffer at 60 fps for rendering.
 
 ```
+Main thread (UI, WebGL2)  <--  SharedArrayBuffer ring buffer  <--  Worker (100 Hz physics + filters)
+```
+
+Key decisions:
+
+- **Lock-free ring buffer.** Producer and consumer never block each other. Read/write head pointers are padded onto separate cache lines to avoid false sharing.
+- **Monte Carlo runs on a 4-thread pool inside WASM** (real OS threads via Emscripten pthreads). A 5000-run, 500-step campaign is 2.5 million filter updates and finishes in under two seconds.
+- **Live progress without blocking.** The Monte Carlo call blocks the worker for its full duration. A separate atomic counter, polled directly off the shared heap by the main thread, drives the progress bar without waiting on a response message.
+- **KF stays 6-state on purpose.** It is the deliberately naive baseline the other two filters are compared against, not an incomplete feature.
+
+See [docs/architecture.md](docs/architecture.md) for the full design and [docs/math.md](docs/math.md) for every filter Jacobian derivation.
+
+## Getting Started
+
+### Prerequisites
+
+- CMake >= 3.18
+- A C++17 compiler
+- Eigen3 (`brew install eigen` on macOS, `apt install libeigen3-dev` on Ubuntu)
+- Node.js and npm
+- [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) 3.1.50 (only needed to build the WASM bundle)
+
+### 1. Build and test the engine (native, no Emscripten needed)
+
+```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Debug engine/
 cmake --build build -j$(nproc)
 cd build && ctest --output-on-failure
 ```
 
-Web app:
+### 2. Build the WASM bundle
 
+```bash
+# one-time setup
+git clone https://github.com/emscripten-core/emsdk.git /opt/emsdk
+/opt/emsdk/emsdk install 3.1.50
+/opt/emsdk/emsdk activate 3.1.50
+
+# build
+./scripts/build_wasm.sh
 ```
+
+This produces `web/public/orbitforge.wasm` and `web/public/orbitforge.js`.
+
+### 3. Run the web app
+
+```bash
 cd web
 npm install
 npm run dev
 ```
 
-The dev server expects the WASM build (`orbitforge.wasm`, `orbitforge.js`) already sitting in `web/public/`. That's built separately with `scripts/build_wasm.sh` via Emscripten. See `docs/architecture.md` for the full toolchain and the COOP/COEP headers a SharedArrayBuffer needs to even exist in the browser.
+The dev server sets the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers `SharedArrayBuffer` requires. Without them the WASM module will fail to load with a cross-origin isolation error.
+
+## Testing
+
+| Layer | Command | Coverage |
+|---|---|---|
+| Engine | `ctest --output-on-failure` | 112 tests, clean under ASan, UBSan, and ThreadSanitizer |
+| Web | `npx playwright test` (inside `web/`) | 8 end-to-end browser tests: run/pause/reset lifecycle, Monte Carlo |
+
+CI runs both on every push and pull request.
+
+## Project Structure
+
+```
+engine/      C++17 simulation core: dynamics, filters, sensors, Monte Carlo, WASM bindings
+web/         TypeScript frontend: WebGL2 renderer, UI, worker, WASM bridge
+docs/        Architecture, math derivations, benchmarks
+scripts/     Build scripts (WASM build, native benchmarks)
+```
+
+## Tech Stack
+
+- **Engine:** C++17, Eigen, GoogleTest, Emscripten
+- **Frontend:** TypeScript, Vite, WebGL2, Chart.js
+- **Testing:** GoogleTest + sanitizers (engine), Playwright (browser)
+- **CI/CD:** GitHub Actions, Cloudflare Pages
 
 ## Status
 
-112 engine tests passing, clean under AddressSanitizer, UndefinedBehaviorSanitizer, and ThreadSanitizer. 8 end to end browser tests covering the run, pause, reset, and Monte Carlo lifecycle. CI builds and tests the engine and the WASM bundle on every push. Deployment to orbitforge.dev is wired up in CI but not live yet, it needs a Cloudflare account on my end.
+Engine and frontend are feature complete through 6DOF attitude estimation and configurable Monte Carlo. Deployment is wired up in CI but not live yet on orbitforge.dev, pending a Cloudflare account on my end.
 
-Further reading: `docs/architecture.md` for the system design, `docs/math.md` for every Jacobian derivation, `docs/benchmarks.md` for measured numbers against target.
+Further reading: [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md), [docs/benchmarks.md](docs/benchmarks.md).
