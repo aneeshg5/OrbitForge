@@ -50,6 +50,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # web/public/orbitforge.{wasm,js,worker.js} are gitignored build
+      # outputs (deploy.yml's job builds them, but that's a separate
+      # workflow run with no shared filesystem) — without building them
+      # here too, the dev server Playwright drives has no WASM to serve,
+      # every fetch for them 404s as an HTML page, and any test exercising
+      # the actual simulation fails with a generic "Unexpected token '<'"
+      # page error instead of a useful one. Same Emscripten setup as
+      # deploy.yml's build-and-deploy job.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeigen3-dev
+
+      - name: Cache Emscripten SDK
+        uses: actions/cache@v4
+        with:
+          path: /opt/emsdk
+          key: emsdk-3.1.50
+
+      - name: Install Emscripten SDK
+        run: |
+          if [ ! -d /opt/emsdk ]; then
+            git clone https://github.com/emscripten-core/emsdk.git /opt/emsdk
+            /opt/emsdk/emsdk install 3.1.50
+            /opt/emsdk/emsdk activate 3.1.50
+          fi
+
+      - name: Build WASM
+        run: ./scripts/build_wasm.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -64,6 +95,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: playwright-report
-          path: web/playwright-report/
+          name: playwright-test-results
+          path: web/test-results/
           retention-days: 7

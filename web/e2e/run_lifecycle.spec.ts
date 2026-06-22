@@ -26,26 +26,7 @@ async function waitForTleLoaded(page: Page): Promise<void> {
 }
 
 test.beforeEach(async ({ page }) => {
-  // Surfaces the worker/WASM thread's own console output (and any
-  // uncaught page error) directly in the CI log — diagnostic for tracking
-  // down why the simulation never produces frames in CI even though the
-  // same build works locally.
-  page.on('console', (msg) => {
-    if (msg.type() === 'error' || msg.type() === 'warning') {
-      console.log(`[browser ${msg.type()}] ${msg.text()}`)
-    }
-  })
-  page.on('pageerror', (err) => console.log(`[page error] ${err.message}`))
-  page.on('worker', (worker) => {
-    worker.on('console', (msg) => console.log(`[worker ${msg.type()}] ${msg.text()}`))
-  })
-
   await page.goto('/')
-  const diag = await page.evaluate(() => ({
-    crossOriginIsolated: self.crossOriginIsolated,
-    hasSharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
-  }))
-  console.log(`[diag] crossOriginIsolated=${diag.crossOriginIsolated} hasSharedArrayBuffer=${diag.hasSharedArrayBuffer}`)
   await waitForTleLoaded(page)
 })
 
