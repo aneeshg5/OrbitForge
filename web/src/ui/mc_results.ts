@@ -77,6 +77,11 @@ export class MCResultsPanel {
   // McProgressReader) at all.
   private running = false
   private targetNRuns = 0
+  // True once the live scenario has been initialized at least once (see
+  // the runButton construction comment below) — starts false so the
+  // button is visibly disabled before the first Run, mirroring
+  // RunControls' own runEnabled gating pattern.
+  private mcEnabled = false
 
   constructor(container: HTMLElement, options: MCResultsOptions) {
     this.postToWorker = options.postToWorker
@@ -106,6 +111,15 @@ export class MCResultsPanel {
     this.runButton.textContent = '▶ Run MC'
     this.runButton.addEventListener('click', () => this.onRunMC())
     runsRow.append(runsLabelText, this.runsInput, this.runsLabel, this.runButton)
+    // Monte Carlo's initial condition is a snapshot of the live
+    // Simulation's true state (engine/include/wasm_api.hpp's
+    // x_true_initial_), which is only populated by init_scenario() — sent
+    // on the first "Run" click, not merely picking a satellite/TLE. Before
+    // that, a campaign would run against a zeroed-out state vector and
+    // produce all-NaN results (orbital mechanics divides by |r|, which is
+    // 0). Disabled here and enabled by main.ts's setMcEnabled() the moment
+    // it observes the first 'init' message go to the worker.
+    this.updateRunButtonState()
 
     this.statusLine = el('div', 'status-line')
     this.progressTrack = el('div', 'mc-progress-track')
@@ -216,10 +230,11 @@ export class MCResultsPanel {
   }
 
   private onRunMC(): void {
+    if (!this.mcEnabled || this.running) return
     const nRuns = Number(this.runsInput.value)
     this.targetNRuns = nRuns
     this.running = true
-    this.runButton.disabled = true
+    this.updateRunButtonState()
     this.progressTrack.style.display = ''
     this.updateProgress(0)
     this.postToWorker({ type: 'run_monte_carlo', payload: { nRuns, seed: -1 } })
@@ -228,6 +243,18 @@ export class MCResultsPanel {
   /** True between dispatching a campaign and its 'mc_results' response — main.ts's render loop polls progress only while this holds. */
   isRunning(): boolean {
     return this.running
+  }
+
+  /** Called by main.ts the moment it observes the first 'init' message go to the worker — see runButton's construction comment. */
+  setMcEnabled(enabled: boolean): void {
+    this.mcEnabled = enabled
+    this.updateRunButtonState()
+  }
+
+  private updateRunButtonState(): void {
+    const disabled = !this.mcEnabled || this.running
+    this.runButton.disabled = disabled
+    this.runButton.title = this.mcEnabled ? '' : "Click Run first — Monte Carlo reuses the live scenario's initial state"
   }
 
   /** Called by main.ts every render frame while isRunning(), with the live mc_progress_counter() value. */
@@ -242,7 +269,7 @@ export class MCResultsPanel {
   /** Called by main.ts when a 'mc_results' WorkerResponse arrives. */
   handleResults(stats: MCStats): void {
     this.running = false
-    this.runButton.disabled = false
+    this.updateRunButtonState()
     this.progressTrack.style.display = 'none'
     const nRuns = stats.finalPosErrPerRun.length
     this.statusLine.textContent = `Done — ${nRuns} runs, ${stats.rmsPosPerStep.length} steps.`

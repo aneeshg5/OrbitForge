@@ -34,6 +34,21 @@ test('TLE loads and Run becomes enabled', async ({ page }) => {
   await expect(page.getByRole('button', { name: '▶ Run' })).toBeEnabled()
 })
 
+test('Run MC stays disabled until the scenario has been run once', async ({ page }) => {
+  await page.locator('text=Monte Carlo').click()
+  const mcButton = page.getByRole('button', { name: '▶ Run MC' })
+
+  // The actual regression this guards: Monte Carlo's initial condition is
+  // a snapshot of the live Simulation's true state, only populated by the
+  // first init_scenario() call (sent on a "Run" click, not just loading a
+  // TLE) — clicking Run MC before that produces an all-NaN campaign
+  // (orbital mechanics divides by a zeroed-out |r|).
+  await expect(mcButton).toBeDisabled()
+
+  await page.getByRole('button', { name: '▶ Run', exact: true }).click()
+  await expect(mcButton).toBeEnabled()
+})
+
 test('Run advances T+ and Pause freezes it', async ({ page }) => {
   await page.getByRole('button', { name: '▶ Run' }).click()
   await expect(page.getByRole('button', { name: '⏸ Pause' })).toBeVisible()

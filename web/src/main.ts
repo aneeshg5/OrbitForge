@@ -481,6 +481,15 @@ async function main(): Promise<void> {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
   const postToWorker = (msg: WorkerRequest): void => {
     if (msg.type === 'reset') resetView()
+    // 'init' is what populates the live Simulation's x_true_initial_
+    // (wasm_api.hpp) that run_monte_carlo() snapshots as its starting
+    // condition — before this has ever fired once, a campaign would run
+    // against a zeroed-out state and produce all-NaN results. A one-way
+    // latch: 'init' resends on every Reset->Run cycle too, but
+    // setMcEnabled(true) is idempotent and Reset doesn't invalidate the
+    // C++-side snapshot (Simulation::reset() re-runs init_scenario() with
+    // the same cfg_), so there's no case where MC should go back to disabled.
+    if (msg.type === 'init') mcResults!.setMcEnabled(true)
     worker.postMessage(msg)
   }
 
