@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <random>
 #include <thread>
 
 #include "integrators/rk4.hpp"
@@ -148,22 +149,17 @@ void Simulation::set_sim_speed(double sim_speed) {
     cfg_.sim_speed = sim_speed;
 }
 
-void Simulation::run_monte_carlo(size_t n_runs, int seed) {
+void Simulation::run_monte_carlo(const monte_carlo::MCConfig& req_cfg) {
     pause();  // see run_monte_carlo()'s declaration comment in wasm_api.hpp
 
-    monte_carlo::MCConfig mc_cfg;
-    mc_cfg.n_runs  = n_runs;
-    mc_cfg.n_steps = 500;
-    mc_cfg.dt      = 10.0;
+    monte_carlo::MCConfig mc_cfg = req_cfg;
+    // Always inherited from the live scenario, never independently
+    // configurable in the MC panel — see wasm_api.hpp's doc comment.
     mc_cfg.gps_sigma = cfg_.gps_sigma;
-    mc_cfg.q_pos     = cfg_.q_pos;
-    mc_cfg.q_vel     = cfg_.q_vel;
-    mc_cfg.filter    = monte_carlo::FilterKind::ekf;
-    mc_cfg.seed      = (seed >= 0) ? static_cast<unsigned>(seed) : 42u;
     mc_cfg.x0        = x_true_initial_;
 
     mc_stats_  = monte_carlo::run_monte_carlo(mc_cfg);
-    mc_n_runs_ = n_runs;
+    mc_n_runs_ = mc_cfg.n_runs;
 }
 
 void Simulation::run_loop() {
@@ -411,7 +407,7 @@ void set_sim_speed(double sim_speed) { global_simulation().set_sim_speed(sim_spe
 double get_sim_time() { return global_simulation().get_sim_time(); }
 bool is_running() { return global_simulation().is_running(); }
 
-void run_monte_carlo(size_t n_runs, int seed) { global_simulation().run_monte_carlo(n_runs, seed); }
+void run_monte_carlo(const monte_carlo::MCConfig& req_cfg) { global_simulation().run_monte_carlo(req_cfg); }
 const monte_carlo::MCStats& get_mc_results() { return global_simulation().get_mc_results(); }
 size_t get_mc_n_runs() { return global_simulation().get_mc_n_runs(); }
 
@@ -513,9 +509,27 @@ int is_running() { return orbitforge::is_running() ? 1 : 0; }
 // + count, not a copy): the returned uintptr_t is a byte offset into WASM
 // linear memory, valid until the next run_monte_carlo() call reallocates
 // the underlying std::vector.
+// filter_kind: orbitforge::monte_carlo::FilterKind's underlying int value
+// (0=kf, 1=ekf, 2=ukf — its declaration order, mc_runner.hpp). seed<0 means
+// "fresh every call" (std::random_device, a real random draw — unlike the
+// engine-internal MCConfig::seed, which has no such sentinel and always
+// means exactly what it says); seed>=0 reproduces the same campaign every
+// time. Bounds below are this boundary's own validation (CLAUDE.md §20 —
+// "validate at system boundaries"), not reused from anywhere else: this is
+// user input from the MC panel, not an internal call.
 EMSCRIPTEN_KEEPALIVE
-void run_monte_carlo(int n_runs, int seed) {
-    orbitforge::run_monte_carlo(n_runs > 0 ? static_cast<size_t>(n_runs) : 0, seed);
+void run_monte_carlo(int n_runs, int seed, int filter_kind, int n_steps, double dt, double q_pos, double q_vel) {
+    orbitforge::monte_carlo::MCConfig cfg;
+    cfg.n_runs  = n_runs > 0 ? static_cast<size_t>(n_runs) : 1;
+    cfg.n_steps = n_steps > 0 ? n_steps : 1;
+    cfg.dt      = dt > 0.0 ? dt : 10.0;
+    cfg.q_pos   = q_pos >= 0.0 ? q_pos : 0.0;
+    cfg.q_vel   = q_vel >= 0.0 ? q_vel : 0.0;
+    cfg.filter  = (filter_kind >= 0 && filter_kind <= 2)
+                      ? static_cast<orbitforge::monte_carlo::FilterKind>(filter_kind)
+                      : orbitforge::monte_carlo::FilterKind::ekf;
+    cfg.seed    = (seed >= 0) ? static_cast<unsigned>(seed) : std::random_device{}();
+    orbitforge::run_monte_carlo(cfg);
 }
 
 // Address of mc_progress_counter()'s singleton, stable from program start —

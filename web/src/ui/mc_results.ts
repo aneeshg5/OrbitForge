@@ -1,10 +1,18 @@
-// Monte Carlo results panel: a "Runs" slider + "Run MC"
-// button, plus three result widgets once a campaign completes — a
-// final-position-error histogram, an RMS table, and NEES/NIS consistency
-// charts with the campaign's own chi-squared bounds (not the fixed
-// single-run bounds renderer/panels.ts uses). Posts a 'run_monte_carlo'
-// WorkerRequest through the caller-supplied callback; never calls ccall
-// directly.
+// Monte Carlo results panel: a small parameter form (runs, filter, run
+// duration, process noise, seed) + "Run MC" button, plus three result
+// widgets once a campaign completes — a final-position-error histogram, an
+// RMS table, and NEES/NIS consistency charts with the campaign's own
+// chi-squared bounds (not the fixed single-run bounds renderer/panels.ts
+// uses). Posts a 'run_monte_carlo' WorkerRequest through the
+// caller-supplied callback; never calls ccall directly.
+//
+// None of these fields had any UI before — n_runs was the only knob
+// (a slider), everything else (filter, n_steps/dt, process noise, seed)
+// was hardcoded in wasm_api.cpp's Simulation::run_monte_carlo(). Plain
+// number inputs throughout, not sliders (matches scenario_editor.ts's GPS
+// σ / sim speed precedent — a slider's fixed range can't usefully cover
+// both "a quick 50-run check" and "a smooth 5000-run histogram," same
+// reasoning that already ruled out a slider for sim speed).
 
 import {
   Chart,
@@ -18,8 +26,9 @@ import {
   Legend,
   Tooltip,
 } from 'chart.js'
-import type { MCStats } from '../bridge/wasm_types.js'
+import { MCFilterKind, type MCStats } from '../bridge/wasm_types.js'
 import type { WorkerRequest } from '../worker.js'
+import { makeInfoButton } from './info_button.js'
 
 Chart.register(
   BarController, BarElement, LineController, LineElement, PointElement,
@@ -33,6 +42,16 @@ export interface MCResultsOptions {
 const TEXT_MUTED = 'rgba(136, 145, 168, 0.9)'
 const GRID_COLOR = 'rgba(255, 255, 255, 0.06)'
 const HISTOGRAM_BINS = 15
+
+const DEFAULTS = {
+  nRuns: 500,
+  filter: MCFilterKind.Ekf,
+  nSteps: 500,
+  dt: 10.0,
+  qPos: 1.0,
+  qVel: 0.01,
+  seed: 42,
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag)
@@ -59,10 +78,28 @@ function histogramBins(values: number[], bins: number): { labels: string[]; coun
   return { labels, counts }
 }
 
+// "500 steps x 10s" alone doesn't convey much without doing the
+// multiplication — mirrors scenario_editor.ts's formatSimSpeedReadout
+// precedent of translating a raw parameter into a plain-language readout.
+function formatDurationReadout(nSteps: number, dt: number): string {
+  if (!Number.isFinite(nSteps) || nSteps <= 0 || !Number.isFinite(dt) || dt <= 0) return ''
+  const totalSec = nSteps * dt
+  if (totalSec < 60) return `≈ ${totalSec.toFixed(0)} s simulated per run`
+  if (totalSec < 3600) return `≈ ${(totalSec / 60).toFixed(1)} min simulated per run`
+  return `≈ ${(totalSec / 3600).toFixed(2)} hr simulated per run`
+}
+
 export class MCResultsPanel {
   private readonly postToWorker: (msg: WorkerRequest) => void
   private readonly runsInput: HTMLInputElement
-  private readonly runsLabel: HTMLSpanElement
+  private readonly filterSelect: HTMLSelectElement
+  private readonly stepsInput: HTMLInputElement
+  private readonly dtInput: HTMLInputElement
+  private readonly durationReadout: HTMLSpanElement
+  private readonly qPosInput: HTMLInputElement
+  private readonly qVelInput: HTMLInputElement
+  private readonly seedInput: HTMLInputElement
+  private readonly randomizeCheckbox: HTMLInputElement
   private readonly statusLine: HTMLDivElement
   private readonly progressTrack: HTMLDivElement
   private readonly progressFill: HTMLDivElement
@@ -77,6 +114,11 @@ export class MCResultsPanel {
   // McProgressReader) at all.
   private running = false
   private targetNRuns = 0
+  // dt actually used by the in-flight/last campaign — MCStats doesn't echo
+  // this back, so handleResults() needs it remembered from onRunMC() to
+  // label the RMS table / NEES/NIS chart x-axes correctly (was hardcoded
+  // to 10.0 back when dt itself was hardcoded).
+  private lastDt = DEFAULTS.dt
   // True once the live scenario has been initialized at least once (see
   // the runButton construction comment below) — starts false so the
   // button is visibly disabled before the first Run, mirroring
@@ -93,24 +135,118 @@ export class MCResultsPanel {
 
     const body = el('div', 'mc-body')
 
-    const runsRow = el('div', 'row')
-    const runsLabelText = el('label')
-    runsLabelText.textContent = 'Runs: '
-    this.runsInput = el('input')
-    this.runsInput.type = 'range'
-    this.runsInput.min = '100'
-    this.runsInput.max = '5000'
-    this.runsInput.step = '100'
-    this.runsInput.value = '500'
-    this.runsLabel = el('span')
-    this.runsLabel.textContent = '500'
-    this.runsInput.addEventListener('input', () => {
-      this.runsLabel.textContent = this.runsInput.value
+    const { row: runsRow, input: runsInput } = this.makeNumberRow('Runs:', {
+      min: '1', step: '1', value: String(DEFAULTS.nRuns),
+      explanation: 'Number of independent realizations in this campaign. More runs make the NEES/NIS ' +
+        'averages and the histogram smoother, at a roughly linear cost in time.',
     })
+    this.runsInput = runsInput
+
+    const filterRow = el('div', 'row')
+    const filterLabel = el('label')
+    filterLabel.textContent = 'Filter:'
+    this.filterSelect = el('select')
+    for (const [value, label] of [[MCFilterKind.Kf, 'KF'], [MCFilterKind.Ekf, 'EKF'], [MCFilterKind.Ukf, 'UKF']] as const) {
+      const opt = el('option')
+      opt.value = String(value)
+      opt.textContent = label
+      this.filterSelect.appendChild(opt)
+    }
+    this.filterSelect.value = String(DEFAULTS.filter)
+    const filterInfo = makeInfoButton(
+      'Which filter this campaign runs, against the same noisy measurements each realization. KF is the ' +
+      'intentionally-naive linearized baseline; EKF and UKF use the full nonlinear dynamics.',
+    )
+    filterRow.append(filterLabel, this.filterSelect, filterInfo)
+
+    const durationRow = el('div', 'row')
+    const durationLabel = el('label')
+    durationLabel.textContent = 'Steps:'
+    this.stepsInput = el('input')
+    this.stepsInput.type = 'number'
+    this.stepsInput.className = 'mc-number-input'
+    this.stepsInput.min = '1'
+    this.stepsInput.step = '1'
+    this.stepsInput.value = String(DEFAULTS.nSteps)
+    const dtLabel = el('span')
+    dtLabel.textContent = '×'
+    this.dtInput = el('input')
+    this.dtInput.type = 'number'
+    this.dtInput.className = 'mc-number-input'
+    this.dtInput.min = '0.1'
+    this.dtInput.step = '0.1'
+    this.dtInput.value = String(DEFAULTS.dt)
+    const dtUnit = el('span')
+    dtUnit.textContent = 's'
+    const durationInfo = makeInfoButton(
+      'Number of filter steps and the time between them. Together they set how much simulated time one ' +
+      'realization covers (steps × dt).',
+    )
+    durationRow.append(durationLabel, this.stepsInput, dtLabel, this.dtInput, dtUnit, durationInfo)
+    const durationReadoutRow = el('div', 'mc-duration-readout-row')
+    this.durationReadout = el('span', 'mc-duration-readout')
+    this.durationReadout.textContent = formatDurationReadout(DEFAULTS.nSteps, DEFAULTS.dt)
+    durationReadoutRow.appendChild(this.durationReadout)
+    const refreshDurationReadout = (): void => {
+      this.durationReadout.textContent = formatDurationReadout(
+        Number(this.stepsInput.value), Number(this.dtInput.value),
+      )
+    }
+    this.stepsInput.addEventListener('input', refreshDurationReadout)
+    this.dtInput.addEventListener('input', refreshDurationReadout)
+
+    const noiseRow = el('div', 'row')
+    const noiseLabel = el('label')
+    noiseLabel.textContent = 'Proc. noise:'
+    this.qPosInput = el('input')
+    this.qPosInput.type = 'number'
+    this.qPosInput.className = 'mc-number-input'
+    this.qPosInput.min = '0'
+    this.qPosInput.step = '0.1'
+    this.qPosInput.value = String(DEFAULTS.qPos)
+    const qPosUnit = el('span')
+    qPosUnit.textContent = 'm'
+    this.qVelInput = el('input')
+    this.qVelInput.type = 'number'
+    this.qVelInput.className = 'mc-number-input'
+    this.qVelInput.min = '0'
+    this.qVelInput.step = '0.001'
+    this.qVelInput.value = String(DEFAULTS.qVel)
+    const qVelUnit = el('span')
+    qVelUnit.textContent = 'm/s'
+    const noiseInfo = makeInfoButton(
+      'Random drift injected into the true trajectory every step, in addition to sensor noise — separate ' +
+      'from the Scenario Editor. Higher values mean a harder target for the filter to track.',
+    )
+    noiseRow.append(noiseLabel, this.qPosInput, qPosUnit, this.qVelInput, qVelUnit, noiseInfo)
+
+    const seedRow = el('div', 'row')
+    const seedLabel = el('label')
+    seedLabel.textContent = 'Seed:'
+    this.seedInput = el('input')
+    this.seedInput.type = 'number'
+    this.seedInput.className = 'mc-number-input'
+    this.seedInput.min = '0'
+    this.seedInput.step = '1'
+    this.seedInput.value = String(DEFAULTS.seed)
+    const randomizeLabelEl = el('label')
+    this.randomizeCheckbox = el('input')
+    this.randomizeCheckbox.type = 'checkbox'
+    randomizeLabelEl.append(this.randomizeCheckbox, document.createTextNode(' Randomize'))
+    this.randomizeCheckbox.addEventListener('change', () => {
+      this.seedInput.disabled = this.randomizeCheckbox.checked
+    })
+    const seedInfo = makeInfoButton(
+      "Seed for this campaign's random noise draws. The same seed reproduces an identical campaign every " +
+      'time; check Randomize for a fresh draw each run.',
+    )
+    seedRow.append(seedLabel, this.seedInput, randomizeLabelEl, seedInfo)
+
     this.runButton = el('button')
     this.runButton.textContent = '▶ Run MC'
     this.runButton.addEventListener('click', () => this.onRunMC())
-    runsRow.append(runsLabelText, this.runsInput, this.runsLabel, this.runButton)
+    const runRow = el('div', 'row')
+    runRow.appendChild(this.runButton)
     // Monte Carlo's initial condition is a snapshot of the live
     // Simulation's true state (engine/include/wasm_api.hpp's
     // x_true_initial_), which is only populated by init_scenario() — sent
@@ -164,13 +300,33 @@ export class MCResultsPanel {
     nisCard.append(nisTitle, nisCanvas)
 
     chartsRow.append(histogramCard, rmsCard, neesCard, nisCard)
-    body.append(runsRow, this.statusLine, this.progressTrack, chartsRow)
+    body.append(
+      runsRow, filterRow, durationRow, durationReadoutRow, noiseRow, seedRow, runRow,
+      this.statusLine, this.progressTrack, chartsRow,
+    )
     details.appendChild(body)
     container.appendChild(details)
 
     this.histogramChart = this.makeBarChart(histogramCanvas)
     this.neesChart = this.makeBoundedLineChart(neesCanvas)
     this.nisChart = this.makeBoundedLineChart(nisCanvas)
+  }
+
+  private makeNumberRow(
+    labelText: string,
+    opts: { min: string; step: string; value: string; explanation: string },
+  ): { row: HTMLElement; input: HTMLInputElement } {
+    const row = el('div', 'row')
+    const label = el('label')
+    label.textContent = labelText
+    const input = el('input')
+    input.type = 'number'
+    input.className = 'mc-number-input'
+    input.min = opts.min
+    input.step = opts.step
+    input.value = opts.value
+    row.append(label, input, makeInfoButton(opts.explanation))
+    return { row, input }
   }
 
   private makeBarChart(canvas: HTMLCanvasElement): Chart {
@@ -231,13 +387,22 @@ export class MCResultsPanel {
 
   private onRunMC(): void {
     if (!this.mcEnabled || this.running) return
-    const nRuns = Number(this.runsInput.value)
+
+    const nRuns = Math.max(1, Math.round(Number(this.runsInput.value) || DEFAULTS.nRuns))
+    const nSteps = Math.max(1, Math.round(Number(this.stepsInput.value) || DEFAULTS.nSteps))
+    const dt = Math.max(0.1, Number(this.dtInput.value) || DEFAULTS.dt)
+    const qPos = Math.max(0, Number(this.qPosInput.value) || 0)
+    const qVel = Math.max(0, Number(this.qVelInput.value) || 0)
+    const filter = Number(this.filterSelect.value) as MCFilterKind
+    const seed = this.randomizeCheckbox.checked ? -1 : Math.max(0, Math.round(Number(this.seedInput.value) || DEFAULTS.seed))
+
     this.targetNRuns = nRuns
+    this.lastDt = dt
     this.running = true
     this.updateRunButtonState()
     this.progressTrack.style.display = ''
     this.updateProgress(0)
-    this.postToWorker({ type: 'run_monte_carlo', payload: { nRuns, seed: -1 } })
+    this.postToWorker({ type: 'run_monte_carlo', payload: { nRuns, seed, filter, nSteps, dt, qPos, qVel } })
   }
 
   /** True between dispatching a campaign and its 'mc_results' response — main.ts's render loop polls progress only while this holds. */
@@ -284,9 +449,8 @@ export class MCResultsPanel {
     for (const frac of TABLE_FRACTIONS) {
       const idx = Math.min(nSteps - 1, Math.max(0, Math.round(frac * (nSteps - 1))))
       const row = el('tr')
-      const dt = 10.0  // matches Simulation::run_monte_carlo's fixed dt (wasm_api.cpp)
       for (const text of [
-        ((idx + 1) * dt).toFixed(0),
+        ((idx + 1) * this.lastDt).toFixed(0),
         stats.rmsPosPerStep[idx]!.toFixed(2),
         stats.rmsVelPerStep[idx]!.toFixed(4),
       ]) {
@@ -297,7 +461,7 @@ export class MCResultsPanel {
       this.rmsTableBody.appendChild(row)
     }
 
-    const stepLabels = stats.neesPerStep.map((_, i) => ((i + 1) * 10).toFixed(0))
+    const stepLabels = stats.neesPerStep.map((_, i) => ((i + 1) * this.lastDt).toFixed(0))
     this.updateBoundedChart(this.neesChart, stepLabels, stats.neesPerStep, stats.neesLower, stats.neesUpper)
     this.updateBoundedChart(this.nisChart, stepLabels, stats.nisPerStep, stats.nisLower, stats.nisUpper)
   }

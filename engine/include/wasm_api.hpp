@@ -97,25 +97,22 @@ public:
 
     void step(double dt);
 
-    // Runs an EKF Monte Carlo consistency campaign against the scenario's
+    // Runs a Monte Carlo consistency campaign against the scenario's
     // initial true state (the state at the moment init_scenario() was last
     // called, not the live mid-simulation x_true_ — a stable, reproducible
     // initial condition for a campaign that may be run before, after, or
-    // independent of the live single-run simulation). Always EKF: KF is
-    // the intentionally-divergent demo filter and UKF is ~2.5x the
-    // per-step cost (docs/benchmarks.md) for the same consistency question
-    // EKF already answers, and the public API's run_monte_carlo(n_runs,
-    // seed) signature has no filter-selection parameter, so this is the
-    // one defensible default rather than an arbitrary one. n_steps=500/
-    // dt=10s matches the validated setup in test_filter_consistency.cpp
-    // (McRunner.EkfNeesConsistencyMatchesPhase1Result) — one ISS-orbit-scale
-    // consistency check (~83 min of sim time), not configurable since
-    // ScenarioCfg deliberately carries no duration field. Pauses any
-    // running live simulation first: run_monte_carlo() spawns its own
+    // independent of the live single-run simulation). req_cfg carries every
+    // user-facing knob (n_runs, filter, n_steps, dt, q_pos, q_vel, seed) —
+    // this overwrites only x0 and gps_sigma from live scenario state before
+    // delegating to monte_carlo::run_monte_carlo(), since those two aren't
+    // meant to be independently configurable in the MC panel (gps_sigma
+    // already has a home in the Scenario Editor; x0 has no UI at all,
+    // §6 "real TLE data" is the only source for it). Pauses any running
+    // live simulation first: run_monte_carlo() spawns its own
     // monte_carlo::k_mc_threads (4) worker threads, and the WASM build's
     // PTHREAD_POOL_SIZE is sized to match that — running concurrently with
     // the live sim's own background thread would need a 5th pool slot.
-    void run_monte_carlo(size_t n_runs, int seed);
+    void run_monte_carlo(const monte_carlo::MCConfig& req_cfg);
 
     const monte_carlo::MCStats& get_mc_results() const noexcept { return mc_stats_; }
     size_t get_mc_n_runs() const noexcept { return mc_n_runs_; }
@@ -188,7 +185,7 @@ void      set_sim_speed(double sim_speed);
 double    get_sim_time();
 bool      is_running();
 
-void   run_monte_carlo(size_t n_runs, int seed);
+void   run_monte_carlo(const monte_carlo::MCConfig& req_cfg);
 const monte_carlo::MCStats& get_mc_results();
 size_t get_mc_n_runs();
 

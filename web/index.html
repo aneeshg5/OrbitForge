@@ -528,6 +528,30 @@
     .mc-panel summary::before { content: '▸ '; }
     .mc-panel[open] summary::before { content: '▾ '; }
     .mc-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+    /* Mirrors .scenario-editor .row exactly, scoped to the MC panel
+       instead — same row pattern (label, field(s), info button), just a
+       different parent selector since .row itself is scenario-editor-only. */
+    .mc-panel .row { display: flex; align-items: center; gap: 8px; }
+    .mc-panel .row label { color: var(--text-muted); min-width: 72px; font-size: 12px; }
+    .mc-panel .row select { flex: 0 0 auto; padding: 4px 6px; font-size: 12px; }
+    /* All of the MC panel's numeric inputs (runs/steps/dt/process noise/
+       seed) share one style — narrow, monospace, matches
+       .sim-speed-number/.gps-sigma-number's existing precedent exactly. */
+    .mc-number-input {
+      width: 56px;
+      padding: 4px 6px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      flex: 0 0 auto;
+    }
+    .mc-number-input:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
+    .mc-number-input:disabled { opacity: 0.5; }
+    .mc-duration-readout-row { padding-left: 80px; margin-top: -4px; }
+    .mc-duration-readout { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
     /* Live "N / total realizations" readout — width set from JS each poll,
        not CSS-animated, since it must track the actual atomic counter
        (mc_progress_reader.ts), not a guessed duration. */

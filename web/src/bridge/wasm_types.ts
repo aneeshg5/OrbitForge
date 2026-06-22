@@ -80,6 +80,30 @@ export interface FaultConfig {
   magnitude: number; // fault-specific parameter
 }
 
+// Mirrors orbitforge::monte_carlo::FilterKind's declaration order
+// (mc_runner.hpp) exactly — that order is the wire format (passed as a
+// plain int across the ccall boundary), not just a convenient enum.
+export const enum MCFilterKind {
+  Kf  = 0,
+  Ekf = 1,
+  Ukf = 2,
+}
+
+// User-facing knobs for one Monte Carlo campaign (mc_results.ts). seed
+// of -1 means "fresh every call" (the extern "C" run_monte_carlo wrapper,
+// wasm_api.cpp, draws a real std::random_device value) — engine-internal
+// MCConfig has no such sentinel, this is purely a JS/WASM-boundary
+// convention, same as ScenarioConfig.seed's existing -1 = random.
+export interface MCRunParams {
+  nRuns: number;
+  seed: number;
+  filter: MCFilterKind;
+  nSteps: number;
+  dt: number;     // seconds between filter steps
+  qPos: number;   // process noise std dev, position, meters
+  qVel: number;   // process noise std dev, velocity, m/s
+}
+
 export interface MCStats {
   rmsPosPerStep: number[];
   rmsVelPerStep: number[];

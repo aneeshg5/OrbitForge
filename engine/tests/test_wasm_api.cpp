@@ -338,7 +338,10 @@ TEST(Simulation, RunMonteCarloProducesCorrectlySizedFiniteResults) {
     sim.init_scenario(iss_like_cfg());
 
     constexpr size_t k_n_runs = 20;
-    sim.run_monte_carlo(k_n_runs, 123);
+    orbitforge::monte_carlo::MCConfig req;
+    req.n_runs = k_n_runs;
+    req.seed = 123;
+    sim.run_monte_carlo(req);
 
     const auto& stats = sim.get_mc_results();
     EXPECT_EQ(sim.get_mc_n_runs(), k_n_runs);
@@ -356,9 +359,13 @@ TEST(Simulation, RunMonteCarloIsDeterministicGivenSameSeed) {
     Simulation sim;
     sim.init_scenario(iss_like_cfg());
 
-    sim.run_monte_carlo(10, 555);
+    orbitforge::monte_carlo::MCConfig req;
+    req.n_runs = 10;
+    req.seed = 555;
+
+    sim.run_monte_carlo(req);
     const auto a = sim.get_mc_results().nees;
-    sim.run_monte_carlo(10, 555);
+    sim.run_monte_carlo(req);
     const auto b = sim.get_mc_results().nees;
 
     ASSERT_EQ(a.size(), b.size());
@@ -371,16 +378,48 @@ TEST(Simulation, RunMonteCarloPausesAnyRunningLiveSimulation) {
     sim.start();
     ASSERT_TRUE(sim.is_running());
 
-    sim.run_monte_carlo(4, 1);
+    orbitforge::monte_carlo::MCConfig req;
+    req.n_runs = 4;
+    req.seed = 1;
+    sim.run_monte_carlo(req);
 
     EXPECT_FALSE(sim.is_running());
+}
+
+// req_cfg's filter/n_steps/dt/q_pos/q_vel pass through untouched — only
+// gps_sigma/x0 get overwritten from live scenario state (wasm_api.hpp's
+// doc comment on run_monte_carlo()). Picks non-default values for all
+// five to actually exercise that pass-through, not just confirm n_runs.
+TEST(Simulation, RunMonteCarloPassesThroughUserConfigurableFields) {
+    Simulation sim;
+    sim.init_scenario(iss_like_cfg());
+
+    orbitforge::monte_carlo::MCConfig req;
+    req.n_runs = 6;
+    req.seed = 7;
+    req.filter = orbitforge::monte_carlo::FilterKind::ukf;
+    req.n_steps = 37;
+    req.dt = 5.0;
+    req.q_pos = 2.5;
+    req.q_vel = 0.05;
+    sim.run_monte_carlo(req);
+
+    const auto& stats = sim.get_mc_results();
+    EXPECT_EQ(stats.rms_pos.size(), 37u);  // n_steps passed through
+    for (double v : stats.nees) EXPECT_TRUE(std::isfinite(v));
 }
 
 TEST(WasmFreeFunctionApi, RunMonteCarloMatchesSimulationBehavior) {
     using namespace orbitforge;
 
     init_scenario(iss_like_cfg());
-    run_monte_carlo(8, 99);
+    monte_carlo::MCConfig req;
+    req.n_runs = 8;
+    req.seed = 99;
+    // Qualified: ADL finds monte_carlo::run_monte_carlo(const MCConfig&)
+    // too (req's own namespace), which is otherwise genuinely ambiguous
+    // with this wasm_api free function of the same argument type.
+    orbitforge::run_monte_carlo(req);
 
     EXPECT_EQ(get_mc_n_runs(), 8u);
     EXPECT_EQ(get_mc_results().final_pos_err.size(), 8u);

@@ -7,7 +7,7 @@
 // worker's only job after init is to relay UI control messages into WASM
 // ccall()s.
 
-import type { FaultConfig, MCStats, OrbitForgeModule, ScenarioConfig } from './bridge/wasm_types.js'
+import type { FaultConfig, MCRunParams, MCStats, OrbitForgeModule, ScenarioConfig } from './bridge/wasm_types.js'
 
 export interface InitMessage {
   type: 'init'
@@ -31,7 +31,7 @@ export interface SetSimSpeedMessage {
 }
 export interface RunMonteCarloMessage {
   type: 'run_monte_carlo'
-  payload: { nRuns: number; seed: number }
+  payload: MCRunParams
 }
 export type WorkerRequest =
   | InitMessage
@@ -141,8 +141,13 @@ function readF64Array(module: OrbitForgeModule, ptr: number, len: number): numbe
 // are copied out of WASM memory immediately after the call returns, before
 // any other ccall can run_monte_carlo() again and reallocate them
 // underneath a stale pointer.
-function runMonteCarlo(module: OrbitForgeModule, nRuns: number, seed: number): MCStats {
-  module.ccall('run_monte_carlo', null, ['number', 'number'], [nRuns, seed])
+function runMonteCarlo(module: OrbitForgeModule, params: MCRunParams): MCStats {
+  module.ccall(
+    'run_monte_carlo',
+    null,
+    ['number', 'number', 'number', 'number', 'number', 'number', 'number'],
+    [params.nRuns, params.seed, params.filter, params.nSteps, params.dt, params.qPos, params.qVel],
+  )
 
   const nSteps = module.ccall('get_mc_n_steps', 'number', [], []) as number
   const nRunsActual = module.ccall('get_mc_n_runs', 'number', [], []) as number
@@ -193,7 +198,7 @@ self.addEventListener('message', (e: MessageEvent<WorkerRequest>) => {
         module.ccall('set_sim_speed', null, ['number'], [msg.payload.simSpeed])
         break
       case 'run_monte_carlo': {
-        const stats = runMonteCarlo(module, msg.payload.nRuns, msg.payload.seed)
+        const stats = runMonteCarlo(module, msg.payload)
         const response: McResultsMessage = { type: 'mc_results', payload: stats }
         self.postMessage(response)
         break
