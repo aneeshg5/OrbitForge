@@ -2,9 +2,7 @@
 
 Real satellite orbits. Real Kalman filters. Runs entirely in the browser, no server.
 
-[orbitforge.dev](https://orbitforge.dev)
-
-![CI](https://github.com/aneeshg5/OrbitForge/actions/workflows/ci.yml/badge.svg)
+**Live Site:** [orbitforge.dev](https://orbitforge.dev)
 
 ![OrbitForge main view](docs/screenshots/main-view.png)
 
