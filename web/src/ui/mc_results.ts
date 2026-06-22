@@ -337,9 +337,9 @@ export class MCResultsPanel {
     details.appendChild(body)
     container.appendChild(details)
 
-    this.histogramChart = this.makeBarChart(histogramCanvas)
-    this.neesChart = this.makeBoundedLineChart(neesCanvas)
-    this.nisChart = this.makeBoundedLineChart(nisCanvas)
+    this.histogramChart = this.makeBarChart(histogramCanvas, 'Position error [m]', 'Count')
+    this.neesChart = this.makeBoundedLineChart(neesCanvas, 'NEES')
+    this.nisChart = this.makeBoundedLineChart(nisCanvas, 'NIS')
   }
 
   // One toolbar column: a small label (+ info button) on top, the given
@@ -355,9 +355,10 @@ export class MCResultsPanel {
     return field
   }
 
-  private makeBarChart(canvas: HTMLCanvasElement): Chart {
+  private makeBarChart(canvas: HTMLCanvasElement, xTitle: string, yTitle: string): Chart {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')
+    const axisTitle = (text: string) => ({ display: true, text, color: TEXT_MUTED, font: { size: 9 } })
     return new Chart(ctx, {
       type: 'bar',
       data: { labels: [], datasets: [{ label: 'runs', data: [], backgroundColor: 'rgba(91,140,255,0.6)' }] },
@@ -366,8 +367,8 @@ export class MCResultsPanel {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { type: 'category', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 }, maxTicksLimit: 5 } },
-          y: { type: 'linear', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 } } },
+          x: { type: 'category', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 }, maxTicksLimit: 5 }, title: axisTitle(xTitle) },
+          y: { type: 'linear', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 } }, title: axisTitle(yTitle) },
         },
         plugins: {
           legend: { display: false },
@@ -377,9 +378,10 @@ export class MCResultsPanel {
     })
   }
 
-  private makeBoundedLineChart(canvas: HTMLCanvasElement): Chart {
+  private makeBoundedLineChart(canvas: HTMLCanvasElement, yTitle: string): Chart {
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('canvas 2d context unavailable')
+    const axisTitle = (text: string) => ({ display: true, text, color: TEXT_MUTED, font: { size: 9 } })
     return new Chart(ctx, {
       type: 'line',
       data: {
@@ -395,8 +397,11 @@ export class MCResultsPanel {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          x: { type: 'category', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 }, maxTicksLimit: 5 } },
-          y: { type: 'linear', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 } } },
+          // x is step index/time, formatted as "T+ (s)" the same way
+          // panels.ts's main charts and this panel's own RMS table label
+          // it — consistent across every place a campaign's time axis shows up.
+          x: { type: 'category', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 }, maxTicksLimit: 5 }, title: axisTitle('T+ (s)') },
+          y: { type: 'linear', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 } }, title: axisTitle(yTitle) },
         },
         plugins: {
           legend: {
