@@ -9,6 +9,7 @@ import { EarthRenderer } from './renderer/earth.js'
 import { RotationAxisRenderer } from './renderer/axis.js'
 import { OrbitPathRenderer } from './renderer/orbit.js'
 import { CovarianceEllipsoidRenderer } from './renderer/covariance.js'
+import { SatelliteMarkerRenderer } from './renderer/satellite_marker.js'
 import { AttitudeGizmoRenderer, AttitudeSmoother, type GizmoViewport } from './renderer/attitude.js'
 import { Starfield } from './renderer/starfield.js'
 import { SolarSystemRenderer, sunDirectionScene } from './renderer/solar_system.js'
@@ -57,6 +58,7 @@ interface Scene {
   axis: RotationAxisRenderer
   orbits: OrbitPathRenderer
   covariances: CovarianceEllipsoidRenderer
+  satelliteMarker: SatelliteMarkerRenderer
   attitude: AttitudeGizmoRenderer
   attitudeSmoother: AttitudeSmoother
   attitudeGizmoFrame: HTMLElement
@@ -196,6 +198,7 @@ function setupScene(): Scene {
     axis: new RotationAxisRenderer(gl),
     orbits: new OrbitPathRenderer(gl),
     covariances: new CovarianceEllipsoidRenderer(gl),
+    satelliteMarker: new SatelliteMarkerRenderer(gl),
     attitude: new AttitudeGizmoRenderer(gl),
     attitudeSmoother: new AttitudeSmoother(),
     attitudeGizmoFrame: document.getElementById('attitude-gizmo-frame')!,
@@ -298,6 +301,13 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   // in sync as the Sun orbits.
   const sunDirScene = sunDirectionScene(simTimeSec)
 
+  // Shared by the satellite marker and the attitude gizmo below — both
+  // must render the same smoothed orientation within one frame (see
+  // AttitudeSmoother's doc in attitude.ts), so this is computed once here
+  // rather than letting each call site invoke update() independently.
+  const attitudeTargetQuat: StateFrame['trueQuat'] = latestFrame ? latestFrame.trueQuat : [0, 0, 0, 1]
+  const smoothedQuat = scene.attitudeSmoother.update(attitudeTargetQuat)
+
   // Starfield still uses a translation-stripped view (genuinely
   // infinitely distant) — see starfield.ts. The Sun and Moon are real,
   // near scene objects now (see solar_system.ts's module comment) and
@@ -317,6 +327,11 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
     scene.covariances.render(view, proj, latestFrame.kfPos, [latestFrame.kfCovDiag[0], latestFrame.kfCovDiag[1], latestFrame.kfCovDiag[2]], FILTER_COLOR_RGB.kf)
     scene.covariances.render(view, proj, latestFrame.ekfPos, [latestFrame.ekfCovDiag[6], latestFrame.ekfCovDiag[7], latestFrame.ekfCovDiag[8]], FILTER_COLOR_RGB.ekf)
     scene.covariances.render(view, proj, latestFrame.ukfPos, [latestFrame.ukfCovDiag[6], latestFrame.ukfCovDiag[7], latestFrame.ukfCovDiag[8]], FILTER_COLOR_RGB.ukf)
+
+    // The actual spacecraft, at its true position/attitude — see
+    // satellite_marker.ts's module doc. Only once a frame exists; there's
+    // nothing to place at the origin's identity attitude before Run.
+    scene.satelliteMarker.render(view, proj, latestFrame.truePos, smoothedQuat, sunDirScene)
   }
 
   scene.solarSystem.render(view, proj, sunDirScene, tSec, simTimeSec)
@@ -331,12 +346,7 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   // sub-rectangle of this same canvas/depth buffer, so anything drawn
   // after it (there is nothing) would paint over it.
   const gizmoViewport = computeGizmoViewport(scene.canvas, scene.attitudeGizmoFrame)
-  const gizmoTargetQuat: StateFrame['trueQuat'] = latestFrame ? latestFrame.trueQuat : [0, 0, 0, 1]
-  // Caps the displayed rotation rate so high sim_speed doesn't strobe the
-  // triad into looking like duplicated axes (see AttitudeSmoother's doc in
-  // attitude.ts) — called once per frame, result shared by render() and
-  // computeAxisTipsNdc() below so the lines and labels never disagree.
-  const gizmoQuat = scene.attitudeSmoother.update(gizmoTargetQuat)
+  const gizmoQuat = smoothedQuat
   scene.attitude.render(gizmoQuat, gizmoViewport, canvas.width, canvas.height)
 
   // X/Y/Z labels track their actual rotating axis tip rather than sitting
