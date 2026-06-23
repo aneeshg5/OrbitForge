@@ -87,8 +87,8 @@ The dev server sets the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-
 ```
 engine/      C++17 simulation core: dynamics, filters, sensors, Monte Carlo, WASM bindings
 web/         TypeScript frontend: WebGL2 renderer, UI, worker, WASM bridge
-docs/        Architecture, math derivations, benchmarks
+docs/        Architecture, math derivations
 scripts/     Build scripts (WASM build, native benchmarks)
 ```
 
-Further reading: [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md), [docs/benchmarks.md](docs/benchmarks.md).
+Further reading: [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md).

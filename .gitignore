@@ -4,15 +4,12 @@ build_*/
 web/dist/
 web/node_modules/
 
-# WASM build outputs (generated, not committed)
+# WASM build outputs
 web/public/orbitforge.wasm
 web/public/orbitforge.js
 web/public/orbitforge.worker.js
 
-# Playwright MCP test artifacts (screenshots, console logs)
 .playwright-mcp/
-
-# Playwright e2e test runner artifacts (web/e2e/, web/playwright.config.ts are committed)
 web/test-results/
 web/playwright-report/
 
@@ -24,8 +21,4 @@ web/playwright-report/
 .idea/
 *.user
 
-# macOS
 .DS_Store
-
-# CLAUDE.md is gitignored per the spec
-CLAUDE.md

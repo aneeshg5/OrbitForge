@@ -129,8 +129,7 @@ campaign, per-run state is stored as one contiguous array per field
 The batch RK4 inner loop iterates over all N runs at a single timestep,
 so this layout makes that access pattern cache-sequential and
 SIMD-vectorizable instead of striding through `sizeof(RunState)` per
-access. Measured improvement over the naive array-of-structs layout is
-in `docs/benchmarks.md`.
+access.
 
 ## Fault injection
 
@@ -152,7 +151,3 @@ the worker thread picking it up.
 - [docs/math.md](math.md) — full derivations: equations of motion, RK4/RK45,
   the analytical EKF Jacobians (including the full J2 Jacobian), the
   UKF square-root sigma-point formulation, and the sensor models.
-- [docs/benchmarks.md](benchmarks.md) — measured step times, ring buffer
-  throughput, and the AoS-vs-SoA Monte Carlo comparison.
-- [docs/checkpoint.md](checkpoint.md) — a running build log: what was
-  built, what broke, and how it was verified, in the order it happened.
