@@ -1,11 +1,11 @@
 # Contributing to OrbitForge
 
-OrbitForge is a learning tool first. Found a place where it doesn't match what you'd expect from the theory? Open an issue, even if you're not sure it's a bug. Have an idea, even half-formed? Open a discussion. No contribution is too small.
+I built to learn orbital mechanics and Kalman filtering, and I'd like it to keep being useful for that. If something's wrong, confusing, or missing, open an issue, even if you're not sure it's a real bug. Same if you just have an idea to expand this project to something more meanigful. Nothing is too small.
 
 ## Ways to contribute
 
 - **Bug:** use the bug report template.
-- **Idea:** use the feature request template, you don't need to build it yourself to suggest it.
+- **Idea:** use the feature request template, no need to build it to suggest it.
 - **Not sure yet?** [Discussions](https://github.com/aneeshg5/OrbitForge/discussions) is lower-friction than an issue.
 - **PR:** small fixes (typos, clear bugs, docs) can just be a PR. Anything that changes behavior or touches the filter math, open an issue first so we're aligned before you do the work.
 
