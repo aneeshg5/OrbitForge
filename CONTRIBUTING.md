@@ -27,6 +27,16 @@ Engine PRs should keep tests passing under the sanitizer builds CI runs (ASan/UB
 
 ## A few conventions
 
-No separate style guide, match the surrounding code. Two things worth knowing up front: C++ is strictly C++17 (Emscripten constraint), and comments are intentionally sparse, reserved for genuinely non-obvious things like a `docs/math.md` citation or memory-ordering rationale, not narration of what the code does. Please don't add that style back in a PR.
+No separate style guide, match the surrounding code. A couple things worth knowing up front:
 
-Want a starting point instead of a from-scratch idea? The engine has a few known simplifications worth picking up: NRLMSISE-00 vs. the current 7-band atmosphere model, J2-only gravity (no J3-J6), no active attitude control (reaction wheels/magnetorquers), no multi-satellite scenarios. These are real gaps, not busywork.
+- C++ is strictly C++17, no C++20 (Emscripten toolchain constraint)
+- Comments are intentionally sparse, reserved for genuinely non-obvious things like a `docs/math.md` citation or memory-ordering rationale, not narration of what the code does. Please don't add that style back in a PR.
+
+## Starting points
+
+If you'd rather pick something up than propose something from scratch, these are known simplifications, real gaps, not busywork:
+
+- NRLMSISE-00 vs. the current 7-band atmosphere model
+- J2-only gravity (no J3-J6)
+- No active attitude control (reaction wheels/magnetorquers)
+- No multi-satellite scenarios
