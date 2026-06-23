@@ -1,0 +1,21 @@
+name: Feature request / idea
+description: Something you'd like to see added, changed, or explored
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see
+      description: A new filter, sensor model, fault type, perturbation, visualization, anything.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: What would this let you do, learn, or demonstrate that you can't right now?
+  - type: textarea
+    id: willing
+    attributes:
+      label: Would you be interested in building this yourself?
+      description: No pressure either way, just helps prioritize what to scope as a good first PR vs. a maintainer-only change.

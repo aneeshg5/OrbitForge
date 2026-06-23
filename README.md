@@ -92,3 +92,7 @@ scripts/     Build scripts (WASM build, native benchmarks)
 ```
 
 Further reading: [docs/architecture.md](docs/architecture.md), [docs/math.md](docs/math.md).
+
+## Contributing
+
+Issues, pull requests, and [discussions](https://github.com/aneeshg5/OrbitForge/discussions) are all welcome, whether that's a bug, a half-formed idea, or "this doesn't match what I learned in my GNC class." See [CONTRIBUTING.md](CONTRIBUTING.md) for build/test instructions and a list of known gaps if you want a starting point.

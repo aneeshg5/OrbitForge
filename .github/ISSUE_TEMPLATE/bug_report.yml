@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in the simulation, filters, or UI isn't behaving correctly
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what did you actually see?
+    validations:
+      required: true
+  - type: input
+    id: scenario
+    attributes:
+      label: Scenario
+      description: Satellite/TLE, sim speed, which perturbations/faults were enabled, anything else relevant to reproducing it
+      placeholder: e.g. ISS preset, sim speed 4320x, GPS Dropout fault at T+60s
+  - type: dropdown
+    id: browser
+    attributes:
+      label: Browser
+      options:
+        - Chrome
+        - Firefox
+        - Safari
+        - Edge
+        - Other (mention in description)
+    validations:
+      required: true
+  - type: textarea
+    id: console
+    attributes:
+      label: Console output
+      description: Anything in the browser console (F12 → Console), if relevant
+      render: text

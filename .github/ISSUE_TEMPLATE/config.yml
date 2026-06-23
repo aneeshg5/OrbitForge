@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions, feedback, or general discussion
+    url: https://github.com/aneeshg5/OrbitForge/discussions
+    about: Not a bug or a concrete feature request? Start a discussion instead, this is exactly what it's for.
