@@ -19,9 +19,9 @@
       --text-muted: #8891a8;
       --text-faint: #5b6378;
 
-      --accent-blue: #5b8cff;   /* KF */
-      --accent-teal: #2dd9c4;   /* EKF */
-      --accent-orange: #f7a93e; /* UKF */
+      --accent-blue: #5b8cff;
+      --accent-teal: #2dd9c4;
+      --accent-orange: #f7a93e;
       --accent-primary: #3b82f6;
       --accent-danger: #ef5a6f;
       --accent-green: #3ddc84;
@@ -54,11 +54,6 @@
       border-bottom: 1px solid var(--border);
       flex: 0 0 auto;
     }
-    /* Elapsed simulated time (not wall-clock) — lets the user tell when
-       to pause after simulating a given duration. Sourced from the
-       engine's own sim_time (StateFrame), so it reflects sim_speed
-       correctly (e.g. running at 10x shows simulated time advancing 10x
-       faster than the wall clock), not just time-since-Run-was-clicked. */
     #sim-time-display {
       font-family: var(--font-mono);
       font-size: 13px;
@@ -99,19 +94,9 @@
     .reset-btn:hover { background: rgba(239, 90, 111, 0.2); }
 
     #layout { display: flex; flex: 1 1 auto; min-height: 0; }
-    /* Wraps just the canvas (not #controls too) so the attitude gizmo
-       legend below can be positioned relative to the globe view alone,
-       not the full #layout row (which would put "bottom-right" over the
-       scenario/fault sidebar instead). */
     #scene-container { position: relative; flex: 1 1 0%; min-width: 0; display: flex; }
     #scene-canvas { flex: 1 1 auto; min-width: 0; display: block; background: radial-gradient(ellipse at 50% 40%, #0a0e1c 0%, var(--bg) 70%); }
 
-    /* Attitude gizmo (renderer/attitude.ts): a fixed corner orientation
-       indicator, not a 3D object at the spacecraft's world position (see
-       that file's module doc for why). No background/border — this div
-       is purely a geometry reference so main.ts knows where/how big to
-       draw the WebGL triad underneath (see its use of
-       getBoundingClientRect() on #attitude-gizmo-frame). */
     #attitude-gizmo-frame {
       position: absolute;
       right: 12px;
@@ -120,12 +105,6 @@
       height: 64px;
       pointer-events: none;
     }
-    /* Disambiguates this from a generic camera-relative "nav gizmo"
-       (Blender/Unity-style, rotates as you orbit) — this one is fixed
-       regardless of camera and only changes with the satellite's real
-       attitude, which is a meaningfully different thing to show and easy
-       to mistake for the other if unlabeled. Sits at the actual bottom
-       corner, below the gizmo itself (not above it). */
     #attitude-gizmo-caption {
       position: absolute;
       right: 12px;
@@ -137,10 +116,6 @@
       color: var(--text-faint);
       pointer-events: none;
     }
-    /* X/Y/Z labels: repositioned every frame by main.ts to track each
-       rotating axis's actual on-screen tip (computed via
-       AttitudeGizmoRenderer.computeAxisTipsNdc()), not a static legend —
-       initial left/top here don't matter, JS sets them immediately. */
     .axis-label {
       position: absolute;
       font-family: var(--font-mono);
@@ -154,11 +129,6 @@
     #axis-label-y { color: rgb(77, 242, 77); }
     #axis-label-z { color: rgb(89, 140, 255); }
 
-    /* Scenario editor + fault injection: moved into the narrow right
-       sidebar (was the chart panels' spot) since these are low-density
-       controls — a handful of sliders/toggles/buttons — that don't need
-       much screen real estate, freeing the full-width strip below the
-       globe for the charts that actually benefit from more room. */
     #controls {
       flex: 0 0 300px;
       display: flex;
@@ -176,11 +146,6 @@
       flex: 0 0 auto;
     }
 
-    /* Chart panels: moved out of the cramped 320px sidebar (where 4
-       charts were squeezed into stacked rows ~70px tall) into a full-width
-       strip below the globe, laid out side by side — far more horizontal
-       resolution per chart, plus more vertical room to actually read
-       trends/consistency bounds. */
     #panels {
       flex: 0 0 300px;
       min-height: 0;
@@ -212,11 +177,6 @@
     }
     .panel-title .unit { font-weight: 400; text-transform: none; color: var(--text-faint); }
     .panel canvas { flex: 1 1 auto; min-height: 0; width: 100% !important; height: 100% !important; }
-    /* Replaces the old static .panel-title — same visual weight (small,
-       muted, uppercase-ish) but an actual control: each chart panel can
-       show any metric (position/velocity error norm or X/Y/Z, attitude
-       error, angular velocity error, covariance trace, NIS), not a fixed
-       one (CLAUDE.md §12 — user-requested "choose which graphs to see"). */
     .panel-metric-select {
       margin: 0 0 4px;
       padding: 2px 4px;
@@ -246,10 +206,6 @@
     .scenario-editor, .fault-panel { display: flex; flex-direction: column; gap: 8px; font-size: 13px; flex: 1 1 auto; }
     .scenario-editor .row { display: flex; align-items: center; gap: 8px; }
     .scenario-editor .row label { color: var(--text-muted); min-width: 64px; font-size: 12px; }
-    /* The sidebar is much narrower now that scenario/fault controls live
-       there instead of spanning the full bottom bar — without this, the
-       satellite <select> sizes to its longest option text and overflows
-       the sidebar's right edge instead of wrapping/eliding within it. */
     .scenario-editor .row select { flex: 1 1 auto; min-width: 0; }
     .fault-panel { flex-direction: row; flex-wrap: wrap; align-content: flex-start; }
     .fault-row { display: inline-flex; align-items: center; gap: 4px; }
@@ -296,8 +252,6 @@
     textarea { resize: vertical; font-family: var(--font-mono); }
     select:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
-    /* Sim speed's typed-value input, paired with its range slider (see
-       scenario_editor.ts) — narrow since it's just a number, not a dropdown. */
     .sim-speed-number {
       width: 56px;
       padding: 4px 6px;
@@ -311,7 +265,6 @@
     }
     .sim-speed-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
-    /* GPS sigma's numeric input — no slider (request: typed value only). */
     .gps-sigma-number {
       width: 56px;
       padding: 4px 6px;
@@ -325,7 +278,6 @@
     }
     .gps-sigma-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
 
-    /* "Run for" duration: number + unit select, empty input = unlimited. */
     .duration-number {
       width: 56px;
       padding: 4px 6px;
@@ -338,20 +290,11 @@
       flex: 0 0 auto;
     }
     .duration-number:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 1px; }
-    /* Overrides ".scenario-editor .row select"'s flex:1 1 auto (meant for
-       the satellite picker) — this select is a few characters, not a
-       dropdown that should claim the row's remaining width. */
     .scenario-editor .row select.duration-unit { flex: 0 0 auto; min-width: 0; padding: 4px 6px; font-size: 12px; }
 
-    /* "≈ 1 sim-day every Ns" caption under the Sim speed row (scenario_editor.ts's
-       formatSimSpeedReadout) — a plain row's label gutter doesn't apply here, so
-       its own minimal rule instead of reusing .scenario-editor .row. */
     .sim-speed-readout-row { padding-left: 0; margin-top: -2px; }
     .sim-speed-readout { font-size: 11px; color: var(--text-faint); font-family: var(--font-mono); }
 
-    /* Click-to-toggle "what does this mean" button for jargon/symbol
-       labels (scenario_editor.ts's makeInfoButton) — not a native title=
-       tooltip since the ask was specifically for something clickable. */
     .info-btn-wrapper { display: inline-flex; flex: 0 0 auto; }
     .info-btn {
       width: 16px;
@@ -400,8 +343,6 @@
       color: var(--text);
     }
 
-    /* Paste-TLE textarea: the info button sits inside its own top-right
-       corner instead of a separate label row above it. */
     .tle-section { position: relative; }
     .tle-section textarea { width: 225px; padding-right: 26px; }
     .tle-info-overlay { position: absolute; top: 6px; right: 6px; }
@@ -414,7 +355,7 @@
       border: none;
       border-radius: 2px;
       flex: 1 1 auto;
-      min-width: 0; /* override the UA's intrinsic min-width so it can actually shrink in a tight row (e.g. sim speed's slider + number input + unit) */
+      min-width: 0;
       cursor: pointer;
     }
     input[type='range']::-webkit-slider-thumb {
@@ -435,21 +376,8 @@
       border: none;
     }
 
-    /* J2/Drag/SRP: label + info button as siblings, not nested (see
-       makeCheckbox's comment for why) — this wrapper keeps each pair
-       visually together while .row's own gap separates the three fields. */
-    /* Fixed equal width per field (sized for "Drag", the longest label) so
-       J2/Drag/SRP form even columns — the row's gap alone is already a
-       uniform 8px between fields, but letting each field's width track its
-       own label text made the columns themselves uneven widths, which
-       reads as uneven spacing even though the literal gap wasn't. */
     .checkbox-field { display: inline-flex; align-items: center; gap: 6px; width: 76px; }
 
-    /* Theme native checkboxes to the app's accent color without rebuilding
-       them as custom elements — accent-color recolors the checked state,
-       color-scheme fixes the unchecked box from rendering as a stray
-       light-theme square against this dark UI. Same native size/behavior/
-       accessibility, just themed. */
     input[type='checkbox'] {
       accent-color: var(--accent-primary);
       color-scheme: dark;
@@ -477,9 +405,6 @@
     }
     @keyframes status-spin { to { transform: rotate(360deg); } }
 
-    /* Bottom-right toast notifications (ui/toast.ts) — used for errors
-       that shouldn't sit in small inline status text easy to miss, e.g.
-       a failed CelesTrak TLE fetch. */
     #toast-container {
       position: fixed;
       bottom: 16px;
@@ -511,8 +436,6 @@
     @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
 
-    /* Monte Carlo panel: collapsed by default via a native <details>
-       element — keyboard-accessible disclosure with no extra JS. */
     #mc-results-container { border-top: 1px solid var(--border); flex: 0 0 auto; }
     .mc-panel summary {
       cursor: pointer;
@@ -528,15 +451,7 @@
     .mc-panel summary::before { content: '▸ '; }
     .mc-panel[open] summary::before { content: '▾ '; }
     .mc-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
-    /* Used only by the action row (Randomize checkbox + Run MC) now — the
-       parameter fields themselves moved to .mc-params-toolbar below. */
     .mc-panel .row { display: flex; align-items: center; gap: 8px; }
-    /* All of the MC panel's numeric inputs (runs/steps/dt/process noise/
-       seed) share one style. Sized to fill their grid column (see
-       .mc-params-toolbar below), not the fixed 56px width
-       .sim-speed-number/.gps-sigma-number use for a single inline value —
-       this panel is full-width (a sibling of #panels, not nested in the
-       narrow sidebar), so these fields have real room to use. */
     .mc-number-input {
       width: 100%;
       padding: 8px 10px;
@@ -552,12 +467,6 @@
     .mc-number-input:disabled { opacity: 0.5; }
     .mc-duration-readout-row { margin-top: -4px; }
     .mc-duration-readout { font-size: 12px; color: var(--text-faint); font-family: var(--font-mono); }
-    /* Each parameter is its own column (label above, control below).
-       auto-fit + minmax spreads them across this panel's full width
-       (growing past their minimum when there's room, same as #panels'
-       chart grid above it) instead of packing tight on the left, and
-       still wraps to fewer columns on a narrow viewport. See
-       mc_results.ts's makeField()/toolbar construction comment. */
     .mc-params-toolbar {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -569,9 +478,6 @@
     .mc-field select { width: 100%; padding: 8px 10px; font-size: 14px; box-sizing: border-box; }
     .mc-randomize-row { margin-top: 2px; }
     .mc-randomize-row label { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
-    /* Live "N / total realizations" readout — width set from JS each poll,
-       not CSS-animated, since it must track the actual atomic counter
-       (mc_progress_reader.ts), not a guessed duration. */
     .mc-progress-track {
       height: 4px;
       border-radius: 2px;
@@ -596,22 +502,11 @@
     }
 
     @media (max-width: 900px) {
-      /* Below this width, stop fitting the whole dashboard into one fixed
-         100vh viewport (that's what squeezed the globe to ~95px tall in
-         the first version of this breakpoint — #panels' fixed height left
-         #scene-canvas only the leftover space) and let the page scroll
-         instead: each section gets a sensible fixed/min height and the
-         document grows normally. This is the more robust pattern for a
-         data-dense dashboard on a small screen — verified by measuring
-         getBoundingClientRect() for #layout/#panels/#controls/#scene-canvas
-         at 700px width after the fix, not by eyeballing a screenshot. */
       html, body, #app { height: auto; min-height: 100%; }
       #layout { flex-direction: column; }
       #scene-canvas { min-height: 280px; flex: 0 0 280px; }
       #controls { flex-direction: row; flex-wrap: wrap; flex: 0 0 auto; border-left: none; border-top: 1px solid var(--border); }
       .control-card { flex: 1 1 260px; }
-      /* 2x2 grid instead of 4 side-by-side columns — at this width, 4
-         columns squeeze each chart too narrow to read. */
       #panels { flex: 0 0 360px; min-height: 0; grid-template-columns: repeat(2, 1fr); grid-template-rows: repeat(2, 1fr); }
       .mc-charts-row { grid-template-columns: repeat(2, 1fr); height: auto; }
       .mc-charts-row .panel { height: 200px; }
