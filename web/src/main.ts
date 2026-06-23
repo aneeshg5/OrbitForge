@@ -220,7 +220,7 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
 
   const aspect = canvas.width / Math.max(1, canvas.height)
-  const proj = mat4Perspective((45 * Math.PI) / 180, aspect, 0.05, 100)
+  const proj = mat4Perspective((45 * Math.PI) / 180, aspect, 0.05, 25000)
   const view = mat4Multiply(camera.viewMatrix(), EARTH_TILT)
 
   const tSec = performance.now() / 1000
