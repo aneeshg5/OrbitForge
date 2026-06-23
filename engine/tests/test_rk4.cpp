@@ -11,8 +11,7 @@ using namespace orbitforge::dynamics;
 
 using State6 = Eigen::Matrix<double, 6, 1>;
 
-// Two-body dynamics: ẋ = [v; a_grav] (no perturbations — orbit is exactly periodic)
-static State6 two_body_f(double /*t*/, const State6& x) {
+static State6 two_body_f(double , const State6& x) {
     State6 dxdt;
     dxdt.head<3>() = x.tail<3>();
     dxdt.tail<3>() = compute_gravity(x.head<3>());
@@ -23,7 +22,6 @@ static double specific_energy(const State6& x) {
     return 0.5 * x.tail<3>().squaredNorm() - k_mu / x.head<3>().norm();
 }
 
-// Propagate for exactly one Kepler period using h=10 s steps plus a final partial step.
 static State6 propagate_one_period(const State6& x0) {
     const double r0 = x0.head<3>().norm();
     const double T  = 2.0 * M_PI * std::sqrt(r0 * r0 * r0 / k_mu);
@@ -42,7 +40,6 @@ static State6 propagate_one_period(const State6& x0) {
 }
 
 TEST(RK4, KeplerOrbitClosure) {
-    // Circular orbit at 408 km — initial state at [r, 0, 0] with tangential velocity
     const double r0 = k_re + 408e3;
     const double v0 = std::sqrt(k_mu / r0);
 
@@ -51,14 +48,12 @@ TEST(RK4, KeplerOrbitClosure) {
 
     const State6 xf = propagate_one_period(x0);
 
-    // After one Kepler period, position must return within 1 m of initial
     EXPECT_NEAR(xf[0], r0,  1.0);
     EXPECT_NEAR(xf[1], 0.0, 1.0);
     EXPECT_NEAR(xf[2], 0.0, 1.0);
 }
 
 TEST(RK4, EnergyConservation) {
-    // Specific orbital energy ε = v²/2 − μ/r must be constant to 1e-8 rel error
     const double r0 = k_re + 408e3;
     const double v0 = std::sqrt(k_mu / r0);
 

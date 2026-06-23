@@ -8,12 +8,6 @@
 using namespace orbitforge;
 using namespace orbitforge::filters;
 
-// ISS-like orbit, two-body only (J2/drag off for clean Jacobian tests).
-// State order (Phase 5, 12-state MEKF): [delta_theta(0-2), omega(3-5),
-// r(6-8), v(9-11)] — see ekf.hpp. These tests only exercise the orbital
-// block (unchanged from Phase 1); the attitude block (omega=0, q_ref =
-// identity by default) stays at its torque-free fixed point throughout
-// and is otherwise untouched.
 static ExtendedKalmanFilter make_ekf() {
     ExtendedKalmanFilter ekf;
 
@@ -23,21 +17,17 @@ static ExtendedKalmanFilter make_ekf() {
     ekf.x.segment<3>(6) = Eigen::Vector3d(r0, 0.0, 0.0);
     ekf.x.segment<3>(9) = Eigen::Vector3d(0.0, v0, 0.0);
 
-    // 100 m position, 1 m/s velocity initial uncertainty
     ekf.P.setZero();
     for (int i = 6; i < 9; ++i) ekf.P(i, i) = 100.0 * 100.0;
     for (int i = 9; i < 12; ++i) ekf.P(i, i) = 1.0;
 
-    // Process noise large enough that det(P) increase is numerically detectable
     ekf.Q.setZero();
-    for (int i = 6; i < 9; ++i) ekf.Q(i, i) = 1.0;        // 1 m² per axis
-    for (int i = 9; i < 12; ++i) ekf.Q(i, i) = 1e-4;       // 0.01 m/s per axis
+    for (int i = 6; i < 9; ++i) ekf.Q(i, i) = 1.0;
+    for (int i = 9; i < 12; ++i) ekf.Q(i, i) = 1e-4;
 
-    // 10 m GPS noise
     ekf.R.setZero();
     for (int i = 0; i < 3; ++i) ekf.R(i, i) = 10.0 * 10.0;
 
-    // Two-body only — keep perturbations off so Jacobian test is clean
     ekf.perturb_cfg.enable_j2   = false;
     ekf.perturb_cfg.enable_drag = false;
     ekf.perturb_cfg.enable_srp  = false;
@@ -46,14 +36,6 @@ static ExtendedKalmanFilter make_ekf() {
 }
 
 TEST(EKF, PredictIncreasesCovariance) {
-    // Without measurements, det(P) of the orbital 6x6 sub-block must
-    // strictly increase (the attitude block is untouched at its
-    // torque-free fixed point — omega=0 is a stationary point of Euler's
-    // equation — so checking the FULL 12x12 determinant would just test
-    // whether that block's det, exactly 0 since it's seeded with no
-    // uncertainty, "increases" from 0, which isn't what this test is
-    // about). Q_pos = 1 m² makes the increase detectable above
-    // double-precision rounding.
     ExtendedKalmanFilter ekf = make_ekf();
     const Eigen::Matrix<double, 6, 6> p_orbit_before = ekf.P.block<6, 6>(6, 6);
     const double det_before = p_orbit_before.determinant();
@@ -64,21 +46,17 @@ TEST(EKF, PredictIncreasesCovariance) {
 }
 
 TEST(EKF, UpdateDecreasesCovariance) {
-    // A GPS measurement must reduce total uncertainty (trace(P) decreases).
     ExtendedKalmanFilter ekf = make_ekf();
-    ekf.predict(10.0);  // advance to a realistic mid-step state first
+    ekf.predict(10.0);
 
     const double trace_before = ekf.P.trace();
-    const Eigen::Vector3d z   = ekf.x.segment<3>(6);  // noiseless measurement
+    const Eigen::Vector3d z   = ekf.x.segment<3>(6);
     ekf.update(z);
 
     EXPECT_LT(ekf.P.trace(), trace_before);
 }
 
 TEST(EKF, J2JacobianShiftsCovariance) {
-    // J2 increases the radial Jacobian entry a_xx = 2μ/r³ + 4*factor vs 2μ/r³.
-    // P(6,9) = dt*(P_pos*a_xx + P_vel): J2 case must be larger than two-body case
-    // (r_x is row/col 6, v_x is row/col 9 in the 12-state layout — see header doc).
     ExtendedKalmanFilter ekf_j2 = make_ekf();
     ekf_j2.perturb_cfg.enable_j2 = true;
 
@@ -91,7 +69,6 @@ TEST(EKF, J2JacobianShiftsCovariance) {
 }
 
 TEST(EKF, JulianDateAdvances) {
-    // predict() must advance julian_date by dt / seconds_per_day
     ExtendedKalmanFilter ekf = make_ekf();
     const double jd0 = ekf.julian_date;
     const double dt  = 10.0;
@@ -99,53 +76,28 @@ TEST(EKF, JulianDateAdvances) {
     EXPECT_NEAR(ekf.julian_date, jd0 + dt / k_sec_per_day, 1e-15);
 }
 
-// ──────────────────────────── Phase 5: attitude block ──────────────────────
-
 TEST(EKF, AttitudeFixedPointAtZeroOmega) {
-    // omega=0 is a stationary point of torque-free Euler's equation, and
-    // delta_theta has no nonlinear dynamics of its own (header doc) — so
-    // with default-constructed q_ref/omega, predict() must leave the
-    // attitude block exactly at rest: omega stays 0, q_ref stays identity.
     ExtendedKalmanFilter ekf = make_ekf();
     ekf.predict(10.0);
-    EXPECT_TRUE(ekf.x.head<3>().isZero());      // delta_theta
-    EXPECT_TRUE(ekf.x.segment<3>(3).isZero());  // omega
+    EXPECT_TRUE(ekf.x.head<3>().isZero());
+    EXPECT_TRUE(ekf.x.segment<3>(3).isZero());
     EXPECT_NEAR(ekf.q_ref.angularDistance(math::Quat::Identity()), 0.0, 1e-12);
 }
 
 TEST(EKF, ResetAttitudeErrorFoldsIntoQRefAndZeroes) {
     ExtendedKalmanFilter ekf = make_ekf();
-    ekf.x.head<3>() = Eigen::Vector3d(0.01, -0.02, 0.03);  // pretend an update posterior
+    ekf.x.head<3>() = Eigen::Vector3d(0.01, -0.02, 0.03);
     const math::Quat q_ref_before = ekf.q_ref;
 
     ekf.reset_attitude_error();
 
     EXPECT_TRUE(ekf.x.head<3>().isZero());
-    // q_ref must have actually rotated (not stayed at its prior value).
     EXPECT_GT(ekf.q_ref.angularDistance(q_ref_before), 1e-4);
     EXPECT_NEAR(ekf.q_ref.norm(), 1.0, 1e-12);
 }
 
+// math.md §7.3.
 TEST(EKF, ResetComposesCorrectionInBodyFrameRightMultiply) {
-    // Geometric, convention-independent check of the reset step's
-    // composition DIRECTION: q_ref <- q_ref * delta_q, not delta_q * q_ref.
-    // The spacecraft-attitude literature (Markley/Shuster) uses a
-    // different quaternion multiplication convention than Eigen's
-    // Hamilton convention used here (their product negates the
-    // cross-product term relative to Hamilton's) — translating their
-    // composition-order equations by hand is genuinely treacherous (see
-    // math.md §7.3's note); this test instead checks the unambiguous
-    // PHYSICAL requirement directly, independent of any paper's notation.
-    //
-    // delta_theta is a correction expressed in the CURRENT BODY FRAME —
-    // it's exactly what H_gyro/H_mag map state perturbations to, in body
-    // coordinates. Composing "apply the existing attitude, then apply a
-    // further small rotation described in the frame that attitude
-    // produces" is the standard intrinsic-rotation rule R_total =
-    // R_existing * R_correction (correction on the right) — this only
-    // relies on Eigen's own documented property that its rotation
-    // matrices compose in the same order as its quaternion product, not
-    // on this codebase's own composition code.
     ExtendedKalmanFilter ekf = make_ekf();
     const math::Quat q_ref_before(Eigen::AngleAxisd(0.7, Eigen::Vector3d(0.3, -0.5, 0.8).normalized()));
     ekf.q_ref = q_ref_before;
@@ -154,10 +106,6 @@ TEST(EKF, ResetComposesCorrectionInBodyFrameRightMultiply) {
 
     ekf.reset_attitude_error();
 
-    // Independently built expected rotation matrix — via Eigen's own
-    // AngleAxis and matrix multiplication directly, not via quat_exp or
-    // any of this codebase's composition helpers — with the correction
-    // applied on the right.
     const Eigen::Matrix3d R_correction = Eigen::AngleAxisd(delta_theta.norm(), delta_theta.normalized()).toRotationMatrix();
     const Eigen::Matrix3d R_expected = q_ref_before.toRotationMatrix() * R_correction;
 

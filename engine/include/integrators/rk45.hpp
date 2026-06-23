@@ -9,7 +9,6 @@
 namespace orbitforge {
 
 namespace detail {
-// Dormand-Prince RK45 Butcher tableau — Hairer & Wanner "Solving ODEs I", Table 5.2
 constexpr double k_dp_a21 =     1.0/5.0;
 constexpr double k_dp_a31 =     3.0/40.0;
 constexpr double k_dp_a32 =     9.0/40.0;
@@ -26,7 +25,6 @@ constexpr double k_dp_a63 = 46732.0/5247.0;
 constexpr double k_dp_a64 =    49.0/176.0;
 constexpr double k_dp_a65 = -5103.0/18656.0;
 
-// 5th-order output weights
 constexpr double k_dp_b1 =    35.0/384.0;
 constexpr double k_dp_b3 =   500.0/1113.0;
 constexpr double k_dp_b4 =   125.0/192.0;
@@ -40,11 +38,8 @@ constexpr double k_dp_e4 =    71.0/1920.0;
 constexpr double k_dp_e5 = -17253.0/339200.0;
 constexpr double k_dp_e6 =    22.0/525.0;
 constexpr double k_dp_e7 =    -1.0/40.0;
-} // namespace detail
+}
 
-// Attempt one Dormand-Prince RK45 step. Returns {x_5th, err_norm}.
-// err_norm < 1 → step accepted; err_norm >= 1 → rejected, retry with smaller h.
-// State: Eigen fixed-size vector. Dynamics: (double t, const State&) -> State.
 template <typename State, typename Dynamics>
 std::pair<State, double> rk45_try_step(
     const State& x, double t, double h, Dynamics&& f, double atol, double rtol)
@@ -63,15 +58,13 @@ std::pair<State, double> rk45_try_step(
 
     const State err = h * (k_dp_e1*k1 + k_dp_e3*k3 + k_dp_e4*k4 + k_dp_e5*k5 + k_dp_e6*k6 + k_dp_e7*k7);
 
-    // Scaled infinity-norm: step accepted when err_norm <= 1
     const double tol      = atol + rtol * x.template lpNorm<Eigen::Infinity>();
     const double err_norm = err.template lpNorm<Eigen::Infinity>() / tol;
 
     return {x5, err_norm};
 }
 
-// Integrate from t0 to t1 using adaptive Dormand-Prince RK45 (math.md §2.2).
-// Defaults: atol=1e-6 m, rtol=1e-9.
+// math.md §2.2.
 template <typename State, typename Dynamics>
 State rk45_integrate(
     const State& x0, double t0, double t1, Dynamics&& f,
@@ -105,4 +98,4 @@ State rk45_integrate(
     return x;
 }
 
-} // namespace orbitforge
+}

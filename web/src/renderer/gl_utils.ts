@@ -1,9 +1,3 @@
-// Minimal WebGL2 + 4x4 matrix helpers shared by earth.ts, orbit.ts, and
-// covariance.ts. No external 3D library (no three.js) — raw WebGL2,
-// the same approach Figma uses for its rendering engine, not a wrapper
-// library.
-
-/** Column-major 4x4 matrix, matching WebGL's convention. */
 export type Mat4 = Float32Array
 
 export function mat4Identity(): Mat4 {
@@ -29,7 +23,6 @@ export function mat4Multiply(a: Mat4, b: Mat4): Mat4 {
   return out
 }
 
-/** Rotation about the Z axis (the camera's default depth/forward axis at azimuth=elevation=0). */
 export function mat4RotateZ(angleRad: number): Mat4 {
   const c = Math.cos(angleRad)
   const s = Math.sin(angleRad)
@@ -41,7 +34,6 @@ export function mat4RotateZ(angleRad: number): Mat4 {
   return out
 }
 
-/** Rotation about the Y axis (Earth's pole, per earth.ts's sphere parameterization). */
 export function mat4RotateY(angleRad: number): Mat4 {
   const c = Math.cos(angleRad)
   const s = Math.sin(angleRad)
@@ -64,7 +56,6 @@ export function mat4Perspective(fovYRad: number, aspect: number, near: number, f
   return out
 }
 
-/** Right-handed look-at view matrix. */
 export function mat4LookAt(eye: [number, number, number], target: [number, number, number], up: [number, number, number]): Mat4 {
   const zx = eye[0] - target[0], zy = eye[1] - target[1], zz = eye[2] - target[2]
   const zLen = Math.hypot(zx, zy, zz) || 1
@@ -93,14 +84,6 @@ export function mat4LookAt(eye: [number, number, number], target: [number, numbe
   return out
 }
 
-// Zeroes the translation column of a view matrix produced by mat4LookAt(),
-// leaving only the rotation. Used for skybox-style "infinitely far"
-// backdrops (starfield.ts): with translation stripped, the eye's actual
-// position (and therefore zoom distance) has no effect on the projected
-// position of a point at a fixed radius — only camera rotation moves it.
-// Without this, a starfield placed at a finite radius would visibly drift
-// as the camera zooms in/out, which reads as wrong (real stars don't get
-// closer when you zoom toward a planet).
 export function mat4StripTranslation(view: Mat4): Mat4 {
   const out = new Float32Array(view)
   out[12] = 0
@@ -140,27 +123,12 @@ export function createProgram(gl: WebGL2RenderingContext, vsSource: string, fsSo
   return program
 }
 
-/** Scene-unit scale: 1 scene unit = 1 Earth radius (k_re = 6.3781e6 m). */
 export const SCENE_SCALE = 1 / 6.3781e6
 
-/**
- * Remaps an ECI vector (x toward vernal equinox, z toward celestial north
- * — see CLAUDE.md §6) onto scene axes, where scene-Y is the pole (matching
- * earth.ts's sphere and the camera's world-Y-centric orbit convention —
- * see main.ts's EARTH_TILT comment for why the remap lives here instead of
- * on Earth's mesh). (x,y,z) -> (x,z,-y) is a proper -90deg rotation about
- * X (determinant +1), not a raw component swap, so handedness is
- * preserved. Does not apply SCENE_SCALE — callers scale before or after
- * as appropriate (orbit/covariance data is in meters; the solar system's
- * synthetic positions are already in scene units).
- */
 export function eciToScene(v: readonly [number, number, number]): [number, number, number] {
   return [v[0], v[2], -v[1]]
 }
 
-// Normalized (0-1) RGB matching index.html's --accent-blue/--accent-teal/
-// --accent-orange tokens and panels.ts's Chart.js series colors, so the
-// same filter reads as the same color in the 3D scene and the charts.
 export const FILTER_COLOR_RGB = {
   kf: [0.357, 0.549, 1.0] as const,
   ekf: [0.176, 0.851, 0.769] as const,

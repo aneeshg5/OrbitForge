@@ -29,13 +29,6 @@ Eigen::Matrix<double, 6, 1> iss_state() {
     return x;
 }
 
-// AoS layout: position and
-// velocity interleaved with a 36-double covariance block the propagation
-// loop below never touches. This is what the "naive" per-run struct in a
-// Monte Carlo ensemble would look like if state were stored AoS — the
-// covariance trailing each run's position/velocity is exactly what pushes
-// consecutive runs' position fields apart in memory, defeating
-// cache-line/prefetch locality for this loop.
 struct RunStateAoS {
     double px, py, pz, vx, vy, vz;
     double cov[36];
@@ -44,10 +37,6 @@ struct RunStateAoS {
 using orbitforge::monte_carlo::EnsembleWorkspace;
 using orbitforge::monte_carlo::step_ensemble_fast;
 
-// Generic path: SoA storage, but per-run scalar processing through the
-// same Eigen::Matrix-based rk4_step()/compute_acceleration() every other
-// benchmark in this file uses. Included to show that SoA storage alone
-// (without a batched kernel) does not move the needle.
 double bench_soa_generic_throughput(size_t n_runs, int n_steps) {
     auto ens = std::make_unique<EnsembleState<orbitforge::monte_carlo::k_mc_max_runs>>();
     const Eigen::Matrix<double, 6, 1> x0 = iss_state();
@@ -68,11 +57,9 @@ double bench_soa_generic_throughput(size_t n_runs, int n_steps) {
     (void)sink;
 
     const double seconds = std::chrono::duration<double>(t1 - t0).count();
-    return static_cast<double>(n_runs) * n_steps / seconds;  // ensemble-steps/sec
+    return static_cast<double>(n_runs) * n_steps / seconds;
 }
 
-// SoA storage + batched gravity/J2 array kernel (accel_gravity_j2_batch).
-// This is the path that can actually vectorize — see ensemble.hpp.
 double bench_soa_fast_throughput(size_t n_runs, int n_steps) {
     using k_max = std::integral_constant<size_t, orbitforge::monte_carlo::k_mc_max_runs>;
     auto ens = std::make_unique<EnsembleState<k_max::value>>();
@@ -82,7 +69,7 @@ double bench_soa_fast_throughput(size_t n_runs, int n_steps) {
 
     const auto t0 = Clock::now();
     for (int step = 0; step < n_steps; ++step) {
-        step_ensemble_fast(*ens, n_runs, 10.0, /*enable_j2=*/true, *ws);
+        step_ensemble_fast(*ens, n_runs, 10.0, true, *ws);
     }
     const auto t1 = Clock::now();
 
@@ -90,7 +77,7 @@ double bench_soa_fast_throughput(size_t n_runs, int n_steps) {
     (void)sink;
 
     const double seconds = std::chrono::duration<double>(t1 - t0).count();
-    return static_cast<double>(n_runs) * n_steps / seconds;  // ensemble-steps/sec
+    return static_cast<double>(n_runs) * n_steps / seconds;
 }
 
 double bench_aos_throughput(size_t n_runs, int n_steps) {
@@ -129,7 +116,7 @@ double bench_aos_throughput(size_t n_runs, int n_steps) {
     (void)sink;
 
     const double seconds = std::chrono::duration<double>(t1 - t0).count();
-    return static_cast<double>(n_runs) * n_steps / seconds;  // ensemble-steps/sec
+    return static_cast<double>(n_runs) * n_steps / seconds;
 }
 
 double bench_mc_runner_wall_ms(size_t n_runs, int n_steps) {
@@ -153,7 +140,7 @@ double bench_mc_runner_wall_ms(size_t n_runs, int n_steps) {
     return std::chrono::duration<double, std::milli>(t1 - t0).count();
 }
 
-}  // namespace
+}
 
 void run_monte_carlo_benchmarks() {
     constexpr size_t n_runs = 1000;
@@ -175,4 +162,4 @@ void run_monte_carlo_benchmarks() {
                 orbitforge::monte_carlo::k_mc_threads, mc_ms);
 }
 
-}  // namespace orbitforge::benchmarks
+}

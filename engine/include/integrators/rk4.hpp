@@ -2,9 +2,7 @@
 
 namespace orbitforge {
 
-// Fixed-step RK4 integrator — math.md §2.1
-// State: Eigen fixed-size vector (operator+ and scalar operator* required).
-// Dynamics: callable (double t, const State&) -> State  [returns ẋ = f(t, x)]
+// math.md §2.1
 template <typename State, typename Dynamics>
 State rk4_step(const State& x, double t, double h, Dynamics&& f) {
     const State k1 = f(t,         x);
@@ -14,4 +12,4 @@ State rk4_step(const State& x, double t, double h, Dynamics&& f) {
     return x + (h / 6.0) * (k1 + 2.0*k2 + 2.0*k3 + k4);
 }
 
-} // namespace orbitforge
+}

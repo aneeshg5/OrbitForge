@@ -10,7 +10,6 @@ KalmanFilter::KalmanFilter() {
     P.setIdentity();
     Q.setZero();
     R.setZero();
-    // Default: GPS measures ECI position directly (caller overrides with R_ecef_eci)
     H.setZero();
     H.block<3, 3>(0, 0).setIdentity();
 }
@@ -26,7 +25,6 @@ void KalmanFilter::predict(double dt) {
         (-orbitforge::k_mu / r3) *
         (Eigen::Matrix3d::Identity() - 3.0 * r_hat * r_hat.transpose());
 
-    // Continuous F, discrete Φ ≈ I + F·dt  (first order)
     Eigen::Matrix<double, 6, 6> F = Eigen::Matrix<double, 6, 6>::Zero();
     F.block<3, 3>(0, 3)           = Eigen::Matrix3d::Identity();
     F.block<3, 3>(3, 0)           = da_dr;
@@ -46,4 +44,4 @@ void KalmanFilter::update(const Eigen::Matrix<double, 3, 1>& z) {
     P = (Eigen::Matrix<double, 6, 6>::Identity() - K * H) * P;
 }
 
-} // namespace orbitforge::filters
+}

@@ -21,10 +21,6 @@ double std_normal_cdf(double z) {
     return 0.5 * std::erfc(-z / std::sqrt(2.0));
 }
 
-// Bisection on the exact normal CDF — no transcribed rational-approximation
-// coefficients to get wrong, and this runs once per chi_squared_quantile()
-// call (campaign-summary time, not per-tick), so the extra iterations cost
-// nothing that matters.
 double std_normal_quantile(double p) {
     double lo = -10.0, hi = 10.0;
     for (int i = 0; i < 100; ++i) {
@@ -34,9 +30,6 @@ double std_normal_quantile(double p) {
     return 0.5 * (lo + hi);
 }
 
-// Per-thread accumulators for one slice of runs. Summed once across threads
-// after all threads join — no shared mutable state during the parallel
-// phase, so no synchronization is needed inside run_one().
 struct PartialSums {
     std::vector<double> sq_pos_err;
     std::vector<double> sq_vel_err;
@@ -44,7 +37,7 @@ struct PartialSums {
     std::vector<double> nis_sum;
     std::vector<int>    nees_cnt;
     std::vector<int>    nis_cnt;
-    std::vector<double> final_pos_err;  // size = this thread's run-slice count
+    std::vector<double> final_pos_err;
 
     PartialSums(int n_steps, size_t slice_count)
         : sq_pos_err(static_cast<size_t>(n_steps), 0.0),
@@ -56,33 +49,16 @@ struct PartialSums {
           final_pos_err(slice_count, 0.0) {}
 };
 
-// Off: index of the orbital position block within the filter's state
-// vector (0 for KF's 6-state [r,v]; 6 for EKF/UKF's 12-state
-// [delta_theta,omega,r,v] — Phase 5, math.md §7.3). This Monte Carlo
-// module deliberately stays an orbital-only consistency check (see file
-// doc and MCConfig's comment) even for the now-12-state EKF/UKF: the
-// attitude block (rows/cols 0..Off-1) gets a placeholder identity P/zero Q
-// and is never measured, but per F's exact block-diagonal structure
-// (math.md §7.3) it cannot influence the orbital block's statistics —
-// giving it a real (not singular) P is purely to keep UKF's S=chol(P)
-// well-defined, not because this campaign models attitude.
+// math.md §7.3.
 template <typename Filter, int Off>
 Filter make_filter(const MCConfig& cfg) {
     Filter f;
     f.x.setZero();
     f.x.template segment<3>(Off)     = cfg.x0.template head<3>();
     f.x.template segment<3>(Off + 3) = cfg.x0.template tail<3>();
-    f.P.setIdentity();  // placeholder PD default for any non-orbital block (no-op when Off==0)
+    f.P.setIdentity();
     f.P.diagonal().template segment<3>(Off).setConstant(cfg.p0_pos * cfg.p0_pos);
     f.P.diagonal().template segment<3>(Off + 3).setConstant(cfg.p0_vel * cfg.p0_vel);
-    // Q must be strictly positive-definite, not just its orbital block:
-    // UKF::predict() takes a Cholesky factor of the FULL Q every tick
-    // (for the SR-form process-noise injection), and a singular Q there
-    // corrupts the entire QR-based S reconstruction — not just the
-    // singular sub-block — silently producing garbage covariance
-    // everywhere. EKF has no equivalent step, so this only bites UKF, but
-    // it's set unconditionally here for both to keep make_filter's
-    // contract simple (a tiny placeholder is harmless for EKF either way).
     f.Q.setZero();
     f.Q.diagonal().setConstant(1e-12);
     f.Q.diagonal().template segment<3>(Off).setConstant(cfg.q_pos * cfg.q_pos);
@@ -91,7 +67,6 @@ Filter make_filter(const MCConfig& cfg) {
     return f;
 }
 
-// KF has no RK4/perturbation-model fields — no-op overload.
 void configure_dynamics(filters::KalmanFilter&, const dynamics::PerturbationConfig&, double) {}
 
 void configure_dynamics(filters::ExtendedKalmanFilter& f, const dynamics::PerturbationConfig& cfg,
@@ -148,8 +123,6 @@ void run_one(const MCConfig& cfg, unsigned run_seed, PartialSums& sums, double& 
         const Eigen::Vector3d z = x_true.head<3>() +
             Eigen::Vector3d(gps_noise(rng), gps_noise(rng), gps_noise(rng));
 
-        // NIS computed pre-update, using the prior (predicted) covariance —
-        // same convention as wasm_api.cpp's Simulation::step().
         const Eigen::Vector3d nu = z - H * flt.x;
         const Eigen::Matrix3d S = H * flt.P * H.transpose() + flt.R;
         sums.nis_sum[static_cast<size_t>(step)] += nu.dot(S.ldlt().solve(nu));
@@ -192,7 +165,7 @@ void run_slice(const MCConfig& cfg, size_t begin, size_t end, PartialSums& sums)
     }
 }
 
-}  // namespace
+}
 
 double chi_squared_quantile(double p, double dof) {
     const double z = std_normal_quantile(p);
@@ -213,7 +186,7 @@ MCStats run_monte_carlo(const MCConfig& cfg) {
     const size_t base = n / k_mc_threads;
     const size_t rem  = n % k_mc_threads;
 
-    std::vector<std::pair<size_t, size_t>> slices;  // (start, end) per thread, for the merge below
+    std::vector<std::pair<size_t, size_t>> slices;
     slices.reserve(k_mc_threads);
     {
         size_t start = 0;
@@ -278,4 +251,4 @@ ConsistencyBounds nis_bounds(size_t n_runs) {
             chi_squared_quantile(0.975, dof) / static_cast<double>(n_runs)};
 }
 
-}  // namespace orbitforge::monte_carlo
+}

@@ -1,33 +1,12 @@
-// Fault injection controls: one button per fault type, each with editable
-// value(s) for whatever that fault actually uses (verified against the
-// engine's switch-case in engine/src/wasm_api.cpp's Simulation::step() —
-// only the fields a given fault's case branch reads are exposed, so there's
-// nothing to edit that silently does nothing) and an info button explaining
-// the mechanism in plain language.
-
 import { FaultType, type FaultConfig } from '../bridge/wasm_types.js'
 import type { WorkerRequest } from '../worker.js'
 import { makeInfoButton } from './info_button.js'
 
 export interface FaultPanelOptions {
   postToWorker: (msg: WorkerRequest) => void
-  // onset_t must be the CURRENT simulated time, not a fixed 0 — the engine
-  // (engine/src/wasm_api.cpp's Simulation::step()) gates windowed faults
-  // (GPS Dropout, GPS Bias) on `t_now < onset_t + duration`. A hardcoded
-  // onset_t=0 makes that window "the first `duration` seconds since
-  // Reset," not "duration seconds from when you clicked the button" — it
-  // silently does nothing once more than `duration` sim-seconds have
-  // elapsed since Reset, which in normal usage (run for a while, then
-  // inject a fault to see how an already-converged filter responds) is
-  // essentially always. One-shot faults (GPS Spike, Maneuver) don't use
-  // onset_t in their gating at all, so this is harmless for them.
   getCurrentSimTimeSec: () => number
 }
 
-// One editable numeric field (magnitude or duration), in whatever unit
-// reads best for that fault — `toRaw` converts the typed UI value into
-// the unit FaultConfig actually expects (only Drag Coeff Error needs this,
-// for percent-to-fraction).
 interface FieldSpec {
   unit: string
   default: number
@@ -84,8 +63,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return e
 }
 
-// Builds a labeled number input for one FieldSpec, returning the element to
-// mount plus a getter for its current value already converted via toRaw.
 function makeField(spec: FieldSpec): { el: HTMLElement; getValue: () => number } {
   const wrapper = el('span', 'fault-field')
   const input = el('input', 'fault-field-input')

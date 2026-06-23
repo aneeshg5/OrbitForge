@@ -12,16 +12,8 @@
 
 namespace orbitforge::monte_carlo {
 
-// Maximum concurrent Monte Carlo runs (UI exposes 100-5000).
 constexpr size_t k_mc_max_runs = 5000;
 
-// Structure-of-Arrays state buffer for N independent true trajectories.
-// Each of the 6 state components is a contiguous array
-// spanning all runs, so step_ensemble()'s inner loop reads/writes 6
-// sequential streams per iteration instead of striding through an
-// interleaved per-run struct that also carries a covariance block the loop
-// never touches — see bench_monte_carlo.cpp for the measured throughput
-// delta against that AoS layout.
 template <size_t MaxN>
 struct EnsembleState {
     std::array<double, MaxN> pos_x{};
@@ -43,11 +35,6 @@ struct EnsembleState {
     }
 };
 
-// Propagates runs [0, n) by one RK4 step of dt seconds, all sharing the
-// same dynamics config and Julian date. Per-run randomness (initial
-// condition spread, process noise injection) is applied by the caller
-// before/after this call — this function is only the batch-propagation
-// step, which is the part that benefits from the SoA layout.
 template <size_t MaxN>
 void step_ensemble(EnsembleState<MaxN>& ens, size_t n, double dt, double julian_date,
                     const dynamics::PerturbationConfig& cfg) noexcept {
@@ -62,20 +49,7 @@ void step_ensemble(EnsembleState<MaxN>& ens, size_t n, double dt, double julian_
     }
 }
 
-// Batched two-body + J2 gravity acceleration (math.md §1.1-1.2), evaluated
-// directly on contiguous double[] streams rather than through the generic
-// per-run compute_acceleration() Vector3d API. This is what actually lets
-// step_ensemble_fast() vectorize: every loop body below touches only
-// sequential arrays and has no data-dependent branch inside the loop (the
-// enable_j2 toggle selects which loop runs, not an inner-loop branch), so
-// the compiler can pack iterations into SIMD lanes.
-//
-// Deliberately scoped to gravity+J2 only — the dominant LEO perturbation
-// and the same scope as the EKF/UKF analytical Jacobian. Drag depends on a
-// branchy 7-band atmosphere lookup and SRP depends on a shared
-// per-tick (not per-run) sun-direction vector; neither benefits from this
-// treatment, so step_ensemble() above remains the correct, general path
-// whenever either is enabled.
+// math.md §1.1-1.2.
 template <size_t MaxN>
 void accel_gravity_j2_batch(const std::array<double, MaxN>& px,
                              const std::array<double, MaxN>& py,
@@ -109,10 +83,6 @@ void accel_gravity_j2_batch(const std::array<double, MaxN>& px,
     }
 }
 
-// Scratch buffers for step_ensemble_fast(), sized for the largest supported
-// ensemble. Allocate once (e.g. at Monte Carlo run start, via
-// std::make_unique) and reuse across ticks — never inside the per-tick hot
-// loop itself.
 template <size_t MaxN>
 struct EnsembleWorkspace {
     std::array<double, MaxN> p1x{}, p1y{}, p1z{}, v1x{}, v1y{}, v1z{};
@@ -124,18 +94,6 @@ struct EnsembleWorkspace {
     std::array<double, MaxN> a3x{}, a3y{}, a3z{};
 };
 
-// Batched RK4 step using accel_gravity_j2_batch(), applying the standard
-// split-RK4 form for second-order systems ẍ = a(x):
-//   a0 = a(p);                 p1 = p + h/2·v;   v1 = v + h/2·a0
-//   a1 = a(p1);                p2 = p + h/2·v1;  v2 = v + h/2·a1
-//   a2 = a(p2);                p3 = p + h·v2;    v3 = v + h·a2
-//   a3 = a(p3)
-//   p_new = p + h/6·(v + 2v1 + 2v2 + v3)
-//   v_new = v + h/6·(a0 + 2a1 + 2a2 + a3)
-// Algebraically identical to applying rk4_step() to the generic dynamics
-// f(p,v) = (v, a(p)) — verified against it in test_ensemble.cpp — but
-// expressed as plain array arithmetic instead of per-run Eigen::Matrix
-// construction, which is what makes it vectorizable.
 template <size_t MaxN>
 void step_ensemble_fast(EnsembleState<MaxN>& ens, size_t n, double dt, bool enable_j2,
                          EnsembleWorkspace<MaxN>& ws) noexcept {
@@ -181,4 +139,4 @@ void step_ensemble_fast(EnsembleState<MaxN>& ens, size_t n, double dt, bool enab
     }
 }
 
-}  // namespace orbitforge::monte_carlo
+}

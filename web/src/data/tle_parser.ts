@@ -1,11 +1,11 @@
 export interface OrbitalElements {
   epochJD: number;
-  inclination: number;    // degrees
-  raan: number;           // right ascension of ascending node, degrees
+  inclination: number;
+  raan: number;
   eccentricity: number;
-  argPerigee: number;     // degrees
-  meanAnomaly: number;    // degrees
-  meanMotion: number;     // revolutions/day
+  argPerigee: number;
+  meanAnomaly: number;
+  meanMotion: number;
   noradId: number;
   name: string;
   tleLine1: string;
@@ -20,7 +20,6 @@ export function parseTle(name: string, line1: string, line2: string): OrbitalEle
     throw new Error('Invalid TLE line designators')
   }
 
-  // Epoch: YYDDD.DDDDDDDD in columns 18-32 of line 1
   const epochStr = line1.slice(18, 32).trim()
   const epochJD = tleEpochToJD(epochStr)
 
@@ -39,12 +38,6 @@ export function parseTle(name: string, line1: string, line2: string): OrbitalEle
   }
 }
 
-// Standard Meeus Gregorian-calendar-to-JD conversion (Meeus, "Astronomical
-// Algorithms" ch. 7), specialized for "January 0.0 UT of `year`" plus the
-// fractional day-of-year offset. Verified against the known reference
-// JD(2024-01-01 00:00 UT) = 2460310.5 and JD(2000-01-01 00:00 UT) = 2451544.5.
-// Mirrors engine/include/scenario.hpp's tle_epoch_to_jd exactly, so the
-// engine and the UI agree on epoch interpretation.
 function tleEpochToJD(epochStr: string): number {
   const year2d = parseInt(epochStr.slice(0, 2), 10)
   const year = year2d >= 57 ? 1900 + year2d : 2000 + year2d

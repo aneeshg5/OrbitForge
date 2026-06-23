@@ -17,7 +17,6 @@ class SPSCRingBuffer {
     static_assert((N & (N - 1)) == 0, "capacity must be a power of 2");
 
 public:
-    // Enqueues item. Returns false and drops the frame if the buffer is full.
     bool push(const T& item) noexcept {
         const size_t w = write_pos_.load(std::memory_order_relaxed);
         const size_t r = read_pos_.load(std::memory_order_acquire);
@@ -27,7 +26,6 @@ public:
         return true;
     }
 
-    // Dequeues into item. Returns false if the buffer is empty.
     bool pop(T& item) noexcept {
         const size_t r = read_pos_.load(std::memory_order_relaxed);
         const size_t w = write_pos_.load(std::memory_order_acquire);
@@ -65,4 +63,4 @@ private:
     alignas(64) T buffer_[N];
 };
 
-}  // namespace orbitforge::memory
+}

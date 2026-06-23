@@ -24,7 +24,7 @@ Eigen::Matrix3d j2_jacobian(const Eigen::Vector3d& r) {
     const double r2  = r.squaredNorm();
     const double r4  = r2 * r2;
     const double r5  = r4 * std::sqrt(r2);
-    const double z2r2 = z * z / r2;          // (z/|r|)²
+    const double z2r2 = z * z / r2;
 
     const double factor =
         1.5 * orbitforge::k_j2 * orbitforge::k_mu *
@@ -40,7 +40,7 @@ Eigen::Matrix3d j2_jacobian(const Eigen::Vector3d& r) {
     return J;
 }
 
-} // namespace
+}
 
 ExtendedKalmanFilter::ExtendedKalmanFilter()
     : julian_date(orbitforge::k_j2000_jd),
@@ -51,7 +51,7 @@ ExtendedKalmanFilter::ExtendedKalmanFilter()
     Q.setZero();
     R.setZero();
     H.setZero();
-    H.block<3, 3>(0, 6).setIdentity();  // GPS-shaped default: position block, columns 6-8
+    H.block<3, 3>(0, 6).setIdentity();
 }
 
 void ExtendedKalmanFilter::predict(double dt) {
@@ -74,18 +74,11 @@ void ExtendedKalmanFilter::predict(double dt) {
     const Eigen::Matrix<double, 12, 12> Phi =
         Eigen::Matrix<double, 12, 12>::Identity() + F * dt;
 
-    // Nonlinear propagation of [omega, r, v]; delta_theta has no physical
-    // value to propagate (see header doc) and is left untouched (== 0,
-    // assuming reset_attitude_error() was called after the prior tick's
-    // updates). q_ref propagates via its own quaternion kinematics, using
-    // the SAME omega the state carries (rigid_body.hpp's AttitudeState is
-    // exactly [q_ref.coeffs(), omega], so this reuses attitude_derivative
-    // unchanged from the "true" trajectory's own propagation).
     dynamics::AttitudeState att;
     att.head<4>() = q_ref.coeffs();
     att.tail<3>() = omega_hat;
     const dynamics::InertiaTensor inertia_local = inertia;
-    auto att_dyn = [&inertia_local](double /*t*/, const dynamics::AttitudeState& s) {
+    auto att_dyn = [&inertia_local](double , const dynamics::AttitudeState& s) {
         return dynamics::attitude_derivative(s, inertia_local);
     };
     att = rk4_step(att, 0.0, dt, att_dyn);
@@ -95,7 +88,7 @@ void ExtendedKalmanFilter::predict(double dt) {
     const double jd  = julian_date;
     const auto&  cfg = perturb_cfg;
     Eigen::Matrix<double, 6, 1> rv = x.tail<6>();
-    auto orbital_dyn = [&jd, &cfg](double /*t*/, const Eigen::Matrix<double, 6, 1>& s) {
+    auto orbital_dyn = [&jd, &cfg](double , const Eigen::Matrix<double, 6, 1>& s) {
         Eigen::Matrix<double, 6, 1> ds;
         ds.head<3>() = s.tail<3>();
         ds.tail<3>() = dynamics::compute_acceleration(s.head<3>(), s.tail<3>(), jd, cfg);
@@ -114,7 +107,6 @@ void ExtendedKalmanFilter::update(const Eigen::Matrix<double, 3, 1>& z) {
     const Eigen::Matrix<double, 12, 3> K = P * H.transpose() * S.inverse();
 
     x = x + K * (z - H * x);
-    // Joseph form: P = (I-KH)·P·(I-KH)ᵀ + K·R·Kᵀ — maintains symmetry and PD.
     const Eigen::Matrix<double, 12, 12> IKH =
         Eigen::Matrix<double, 12, 12>::Identity() - K * H;
     P = IKH * P * IKH.transpose() + K * R * K.transpose();
@@ -126,4 +118,4 @@ void ExtendedKalmanFilter::reset_attitude_error() {
     x.head<3>().setZero();
 }
 
-} // namespace orbitforge::filters
+}

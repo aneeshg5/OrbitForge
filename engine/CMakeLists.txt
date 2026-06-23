@@ -5,10 +5,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Options
 option(ENABLE_TSAN "Enable ThreadSanitizer (disables ASan)" OFF)
 
-# Compiler flags
 add_compile_options(-O2 -Wall -Wextra -Wno-unused-parameter)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -21,13 +19,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     endif()
 endif()
 
-# Eigen3
 find_package(Eigen3 REQUIRED)
 
-# Threads (ring buffer multi-thread test, Phase 2)
 find_package(Threads REQUIRED)
 
-# GTest via FetchContent
 include(FetchContent)
 FetchContent_Declare(
     googletest
@@ -39,7 +34,6 @@ FetchContent_MakeAvailable(googletest)
 
 include_directories(include)
 
-# Engine source files
 set(ENGINE_SOURCES
     src/dynamics/eom.cpp
     src/dynamics/perturbations.cpp
@@ -53,7 +47,6 @@ set(ENGINE_SOURCES
     src/monte_carlo/mc_runner.cpp
 )
 
-# Test target
 add_executable(orbitforge_tests
     ${ENGINE_SOURCES}
     tests/test_eom.cpp
@@ -80,7 +73,6 @@ enable_testing()
 include(GoogleTest)
 gtest_discover_tests(orbitforge_tests)
 
-# Benchmark target
 add_executable(orbitforge_benchmarks
     ${ENGINE_SOURCES}
     benchmarks/bench_integrator.cpp

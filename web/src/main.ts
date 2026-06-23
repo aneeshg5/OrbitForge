@@ -1,7 +1,3 @@
-// Entry point: spawn the simulation worker, wire the WebGL2 scene
-// (Earth + orbit paths + covariance ellipsoids) and the Chart.js error/NIS
-// panels to the ring buffer, and drive a 60 fps render loop.
-
 import { RingReader } from './bridge/ring_reader.js'
 import { McProgressReader } from './bridge/mc_progress_reader.js'
 import type { StateFrame } from './bridge/wasm_types.js'
@@ -21,34 +17,8 @@ import { FaultPanel } from './ui/fault_panel.js'
 import { MCResultsPanel } from './ui/mc_results.js'
 import { RunControls } from './ui/run_controls.js'
 
-// Earth's axial tilt (obliquity) relative to the ecliptic — not modeled
-// anywhere in the physics (everything here is ECI, where the spin axis
-// defines the Z axis by construction), but baked into the view matrix as
-// a fixed world rotation so the globe reads as the familiar tilted Earth
-// rather than upright. Applied before the camera transform so it rotates
-// Earth, orbit paths, and covariance ellipsoids together consistently.
-//
-// Earth's mesh (earth.ts buildSphere) and the camera's own orbit
-// convention (OrbitCamera orbits around world-Y, i.e. Y is "vertical")
-// both already treat Y as the pole/up axis — that pairing is what makes
-// the default camera angle read as a normal globe view rather than
-// staring down the pole. Rather than fight that by moving Earth's pole to
-// match ECI's Z-is-north convention, the ECI->scene remap for satellite
-// data lives in orbit.ts/covariance.ts instead (see SCENE_SCALE usage
-// there) — so Y stays the on-screen pole and this tilt stays a simple
-// roll about the camera's forward (Z) axis, exactly as it always was.
 const EARTH_TILT = mat4RotateZ((23.4 * Math.PI) / 180)
 
-// One full rotation per 86400 SIMULATED seconds (one sim-day) — driven by
-// simTimeSec, not wall-clock, so it freezes whenever the sim is idle/
-// paused exactly like the Sun/Moon already do (solar_system.ts), and a
-// completed rotation always means "T+ just passed a day," not a cosmetic
-// loop unrelated to the clock. scenario_editor.ts's DEFAULTS.simSpeed is
-// set to 86400/20 = 4320 specifically so that, at the default speed, this
-// still completes a visible rotation roughly every 20 real seconds — the
-// same pacing the old wall-clock-driven version had — instead of being
-// imperceptibly slow at 1x. Increasing sim_speed speeds the spin up
-// further (and T+ along with it); decreasing it slows both down together.
 const SPIN_RAD_PER_SIM_SECOND = (2 * Math.PI) / 86400
 
 interface Scene {
@@ -69,29 +39,16 @@ interface Scene {
   canvas: HTMLCanvasElement
 }
 
-// Arcball-style orbit camera: azimuth/elevation/distance around a fixed
-// target, driven by mouse drag with scroll-wheel zoom.
-//
-// Uses the Pointer Events API + setPointerCapture rather than mousedown/
-// mousemove/mouseup: capture keeps receiving move events even if the
-// cursor leaves the canvas mid-drag (the old listener attached mousemove
-// to the canvas would lose tracking the instant the pointer crossed the
-// canvas edge — exactly the kind of thing that reads as "doesn't feel
-// normal"). preventDefault() on pointerdown stops the browser's native
-// drag-image/text-selection gesture from fighting the rotation, which was
-// the dominant cause of the janky feel — without it, every drag was
-// racing against the browser's own default click-drag handling.
 class OrbitCamera {
   private azimuth = 0.6
   private elevation = 0.4
   private distance = 4.0
 
-  // Angular velocity (rad/ms), decayed each frame for inertia after release.
   private velAzimuth = 0
   private velElevation = 0
 
   private static readonly k_drag_sensitivity = 0.005
-  private static readonly k_damping = 0.92 // per-frame velocity decay once released
+  private static readonly k_damping = 0.92
   private static readonly k_min_distance = 1.5
   private static readonly k_max_distance = 40
 
@@ -126,9 +83,6 @@ class OrbitCamera {
       const dElevation = -dy * OrbitCamera.k_drag_sensitivity
       this.azimuth += dAzimuth
       this.elevation = Math.max(-1.5, Math.min(1.5, this.elevation + dElevation))
-      // Carry the latest per-event delta as velocity so release feels like
-      // a natural throw rather than an instant stop — applied only once
-      // dragging stops (see update()), not while still actively dragging.
       this.velAzimuth = dAzimuth
       this.velElevation = dElevation
       e.preventDefault()
@@ -152,7 +106,6 @@ class OrbitCamera {
     }, { passive: false })
   }
 
-  /** Applies inertial decay to any residual angular velocity from a just-released drag. */
   update(): void {
     if (this.dragging) return
     if (Math.abs(this.velAzimuth) < 1e-5 && Math.abs(this.velElevation) < 1e-5) return
@@ -213,13 +166,6 @@ function setupScene(): Scene {
   }
 }
 
-// Converts #attitude-gizmo-frame's on-screen CSS position into the device-
-// pixel, bottom-left-origin rectangle gl.viewport()/gl.scissor() expect —
-// the two coordinate systems disagree on both axis origin (DOM measures
-// from the top, WebGL from the bottom) and units (CSS px vs. device px,
-// which differ by devicePixelRatio once resizeCanvasToDisplaySize scales
-// the canvas's backing buffer). Recomputed every frame rather than cached
-// since the frame can move/resize (window resize, sidebar collapse, etc.).
 function computeGizmoViewport(canvas: HTMLCanvasElement, frame: HTMLElement): GizmoViewport {
   const canvasRect = canvas.getBoundingClientRect()
   const frameRect = frame.getBoundingClientRect()
@@ -230,14 +176,11 @@ function computeGizmoViewport(canvas: HTMLCanvasElement, frame: HTMLElement): Gi
   const height = frameRect.height * scaleY
   const x = (frameRect.left - canvasRect.left) * scaleX
   const topCss = (frameRect.top - canvasRect.top) * scaleY
-  const y = canvas.height - topCss - height // flip: DOM top-origin -> GL bottom-origin
+  const y = canvas.height - topCss - height
 
   return { x, y, width, height }
 }
 
-// Formats elapsed simulated seconds as "D:HH:MM:SS" (days only shown once
-// nonzero — at sim_speed up to 100x a long real-time session can rack up
-// many simulated hours quickly) or "HH:MM:SS" otherwise.
 function formatSimTime(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds))
   const days = Math.floor(s / 86400)
@@ -280,39 +223,19 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   const proj = mat4Perspective((45 * Math.PI) / 180, aspect, 0.05, 100)
   const view = mat4Multiply(camera.viewMatrix(), EARTH_TILT)
 
-  // tSec still drives the Sun's surface turbulence/corona wisp shaders
-  // (solar_system.ts) continuously, wall-clock as before — those are
-  // pure shader liveliness, unrelated to simulated time.
   const tSec = performance.now() / 1000
 
-  // Sun/Moon/Earth-spin are all driven by simulated elapsed time, not
-  // wall-clock (see solar_system.ts's SUN_ORBIT_PERIOD_SEC comment for
-  // why) — 0 before the sim has produced any frames, so they sit at their
-  // initial phase rather than drifting while idle, and freeze whenever the
-  // sim is idle/paused without any separate run-state check needed.
   const simTimeSec = latestFrame ? latestFrame.simTime : 0
   scene.simTimeValue.textContent = formatSimTime(simTimeSec)
 
   const spinAngle = (simTimeSec * SPIN_RAD_PER_SIM_SECOND) % (2 * Math.PI)
   const earthModel = mat4RotateY(spinAngle)
 
-  // Current Sun direction (Earth -> Sun) — see solar_system.ts's
-  // sunDirectionScene(). Used as the light source for both Earth and the
-  // Moon, so the visible Sun position and the lit hemisphere always stay
-  // in sync as the Sun orbits.
   const sunDirScene = sunDirectionScene(simTimeSec)
 
-  // Shared by the satellite marker and the attitude gizmo below — both
-  // must render the same smoothed orientation within one frame (see
-  // AttitudeSmoother's doc in attitude.ts), so this is computed once here
-  // rather than letting each call site invoke update() independently.
   const attitudeTargetQuat: StateFrame['trueQuat'] = latestFrame ? latestFrame.trueQuat : [0, 0, 0, 1]
   const smoothedQuat = scene.attitudeSmoother.update(attitudeTargetQuat)
 
-  // Starfield still uses a translation-stripped view (genuinely
-  // infinitely distant) — see starfield.ts. The Sun and Moon are real,
-  // near scene objects now (see solar_system.ts's module comment) and
-  // use the ordinary view matrix below.
   const viewRotation = mat4StripTranslation(view)
   scene.starfield.render(viewRotation, proj)
 
@@ -321,39 +244,19 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   scene.orbits.render(view, proj)
 
   if (latestFrame) {
-    // KF's cov diag is [r(3),v(3)] — position variance stays at [0..2].
-    // EKF/UKF's is Phase 5's 12-state [delta_theta(3),omega(3),r(3),v(3)]
-    // — position variance moved to [6..8] (index [0..2] is now the
-    // attitude-error variance, a different physical quantity entirely).
     scene.covariances.render(view, proj, latestFrame.kfPos, [latestFrame.kfCovDiag[0], latestFrame.kfCovDiag[1], latestFrame.kfCovDiag[2]], FILTER_COLOR_RGB.kf)
     scene.covariances.render(view, proj, latestFrame.ekfPos, [latestFrame.ekfCovDiag[6], latestFrame.ekfCovDiag[7], latestFrame.ekfCovDiag[8]], FILTER_COLOR_RGB.ekf)
     scene.covariances.render(view, proj, latestFrame.ukfPos, [latestFrame.ukfCovDiag[6], latestFrame.ukfCovDiag[7], latestFrame.ukfCovDiag[8]], FILTER_COLOR_RGB.ukf)
 
-    // The actual spacecraft, at its true position/attitude — see
-    // satellite_marker.ts's module doc. Only once a frame exists; there's
-    // nothing to place at the origin's identity attitude before Run.
     scene.satelliteMarker.render(view, proj, latestFrame.truePos, smoothedQuat, sunDirScene)
   }
 
   scene.solarSystem.render(view, proj, sunDirScene, tSec, simTimeSec)
 
-  // Phase 5: fixed-corner attitude gizmo — see attitude.ts's doc for why
-  // this renders only the true attitude (not EKF/UKF too) as a
-  // screen-space-fixed indicator rather than a 3D object in the world.
-  // Renders unconditionally, not just once latestFrame exists — an
-  // identity-quaternion fallback before the sim has produced any frames,
-  // so the gizmo is never an empty box waiting for Run to be clicked.
-  // Must be the LAST draw of the frame: it overwrites a small
-  // sub-rectangle of this same canvas/depth buffer, so anything drawn
-  // after it (there is nothing) would paint over it.
   const gizmoViewport = computeGizmoViewport(scene.canvas, scene.attitudeGizmoFrame)
   const gizmoQuat = smoothedQuat
   scene.attitude.render(gizmoQuat, gizmoViewport, canvas.width, canvas.height)
 
-  // X/Y/Z labels track their actual rotating axis tip rather than sitting
-  // in a static legend — project each tip through the same transform
-  // render() just used, then convert from NDC to a CSS pixel position
-  // relative to #scene-container (the labels' positioned ancestor).
   const gizmoAspect = gizmoViewport.width / Math.max(1, gizmoViewport.height)
   const axisTips = scene.attitude.computeAxisTipsNdc(gizmoQuat, gizmoAspect)
   const frameRect = scene.attitudeGizmoFrame.getBoundingClientRect()
@@ -365,10 +268,6 @@ function renderScene(scene: Scene, camera: OrbitCamera, latestFrame: StateFrame 
   scene.panels.render()
 }
 
-// ndc: normalized device coords ([-1,1], y-up) of a point within
-// frameRect (the gizmo's on-screen CSS rect). Converts to a CSS pixel
-// position relative to containerRect (#scene-container, the labels'
-// nearest positioned ancestor) and applies it directly to the element.
 function positionAxisLabel(
   label: HTMLElement,
   ndc: readonly [number, number],
@@ -376,16 +275,11 @@ function positionAxisLabel(
   containerRect: DOMRect,
 ): void {
   const xWithinFrame = (ndc[0] * 0.5 + 0.5) * frameRect.width
-  const yWithinFrame = (1 - (ndc[1] * 0.5 + 0.5)) * frameRect.height // flip: NDC y-up -> CSS y-down
+  const yWithinFrame = (1 - (ndc[1] * 0.5 + 0.5)) * frameRect.height
   label.style.left = `${frameRect.left - containerRect.left + xWithinFrame}px`
   label.style.top = `${frameRect.top - containerRect.top + yWithinFrame}px`
 }
 
-// Returns a resetView() handle so main() can clear the previous run's
-// stale state client-side the moment Reset is clicked — independent of the
-// worker roundtrip, so the old orbit trail/satellite position don't linger
-// on screen until the next frame happens to arrive (it may never arrive at
-// all if the user doesn't press Run again right away).
 function startRenderLoop(
   scene: Scene,
   camera: OrbitCamera,
@@ -406,12 +300,6 @@ function startRenderLoop(
     const ringReader = getRingReader()
     if (ringReader) {
       const { frames, reset } = ringReader.drain()
-      // Authoritative: fires once the ring buffer is observed to have
-      // actually wrapped (RingReader.drain()'s doc) — covers the gap
-      // between resetView()'s optimistic clear and the worker really
-      // having run reset_simulation(), during which a frame or two from
-      // just before the reset could otherwise still land and make T+
-      // briefly show a stale non-zero value after Reset.
       if (reset) clearView()
       for (const frame of frames) {
         feedFrameToScene(scene, frame)
@@ -422,13 +310,6 @@ function startRenderLoop(
     renderScene(scene, camera, latestFrame)
     getRunControls()?.checkAutoStop(latestFrame ? latestFrame.simTime : 0)
 
-    // Monte Carlo progress: run_monte_carlo()'s ccall blocks the worker
-    // thread for the whole campaign (worker.ts's doc), so this is the only
-    // way to show live progress — the main thread is never blocked by the
-    // worker and polls mc_progress_counter() directly off the shared WASM
-    // heap (McProgressReader). Only while a campaign is actually running,
-    // both to avoid pointless reads and because the pointer isn't valid
-    // until the first 'ring_buffer_ready' message arrives.
     const mcResultsPanel = getMcResultsPanel()
     if (mcResultsPanel?.isRunning()) {
       const progress = getMcProgress()
@@ -443,12 +324,6 @@ function startRenderLoop(
 }
 
 function registerServiceWorker(): void {
-  // Skipped in dev: vite's dev server serves modules individually with no
-  // build step, so the SW's cache-first strategy (sw.ts) masks source
-  // edits behind a stale cache instead of reflecting them. A registration
-  // from a previous session can also linger across reloads — clear
-  // navigator.serviceWorker.getRegistrations() and caches.keys() if a fix
-  // to web code doesn't seem to take effect in dev.
   if (import.meta.env.DEV) return
   if (!('serviceWorker' in navigator)) return
   navigator.serviceWorker.register('/sw.js').catch((err: unknown) => {
@@ -462,21 +337,10 @@ async function main(): Promise<void> {
   const scene = setupScene()
   const camera = new OrbitCamera(scene.canvas)
 
-  // runControls and scenarioEditor are constructed later (each needs the
-  // other — RunControls.getConfig needs scenarioEditor, and
-  // scenarioEditor's availability callback needs runControls and
-  // mcResults) — all three referenced here only inside closures invoked
-  // later (on click, or after MCResultsPanel exists), by which point
-  // they're assigned. Mirrors the ringReader forward-reference pattern
-  // just below.
   let runControls: RunControls | undefined
   let scenarioEditor: ScenarioEditor | undefined
   let ringReader: RingReader | undefined
   let mcProgress: McProgressReader | undefined
-  // mcResults itself (not just the ring buffer/progress reader) needs a
-  // forward reference too — tick() polls isRunning()/updateProgress() on
-  // it every frame but is wired up before MCResultsPanel is constructed
-  // below, the same ordering constraint runControls already has.
   let mcResults: MCResultsPanel | undefined
   const { resetView, getCurrentSimTimeSec } = startRenderLoop(
     scene, camera, () => ringReader, () => runControls, () => mcProgress, () => mcResults,
@@ -485,16 +349,6 @@ async function main(): Promise<void> {
   const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
   const postToWorker = (msg: WorkerRequest): void => {
     if (msg.type === 'reset') resetView()
-    // 'init' is what populates the live Simulation's x_true_initial_
-    // (wasm_api.hpp) that run_monte_carlo() snapshots as its starting
-    // condition. Marking MCResultsPanel initialized here covers the case
-    // where the user clicked the topbar Run button themselves (MC's own
-    // onRunMC() covers the other case — clicking Run MC first, with
-    // nothing else run yet). A one-way latch: 'init' resends on every
-    // Reset->Run cycle too, but markInitialized() is idempotent and Reset
-    // doesn't invalidate the C++-side snapshot (Simulation::reset()
-    // re-runs init_scenario() with the same cfg_), so there's no case
-    // where MC should go back to uninitialized.
     if (msg.type === 'init') mcResults!.markInitialized()
     worker.postMessage(msg)
   }
@@ -516,11 +370,6 @@ async function main(): Promise<void> {
   const faultContainer = document.getElementById('fault-panel-container')!
   new FaultPanel(faultContainer, { postToWorker, getCurrentSimTimeSec })
 
-  // RunControls.getConfig needs scenarioEditor and scenarioEditor's
-  // availability callback needs runControls and mcResults — constructed
-  // in this order (runControls first, referencing scenarioEditor only
-  // inside a closure invoked later on click) to break the cycle without a
-  // null check.
   const runControlsContainer = document.getElementById('run-controls-container')!
   runControls = new RunControls(runControlsContainer, {
     postToWorker,

@@ -11,7 +11,7 @@ using namespace orbitforge::dynamics;
 
 using State6 = Eigen::Matrix<double, 6, 1>;
 
-static State6 two_body_f(double /*t*/, const State6& x) {
+static State6 two_body_f(double , const State6& x) {
     State6 dxdt;
     dxdt.head<3>() = x.tail<3>();
     dxdt.tail<3>() = compute_gravity(x.head<3>());

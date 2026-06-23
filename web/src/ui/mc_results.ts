@@ -1,19 +1,3 @@
-// Monte Carlo results panel: a small parameter form (runs, filter, run
-// duration, process noise, seed) + "Run MC" button, plus three result
-// widgets once a campaign completes — a final-position-error histogram, an
-// RMS table, and NEES/NIS consistency charts with the campaign's own
-// chi-squared bounds (not the fixed single-run bounds renderer/panels.ts
-// uses). Posts a 'run_monte_carlo' WorkerRequest through the
-// caller-supplied callback; never calls ccall directly.
-//
-// None of these fields had any UI before — n_runs was the only knob
-// (a slider), everything else (filter, n_steps/dt, process noise, seed)
-// was hardcoded in wasm_api.cpp's Simulation::run_monte_carlo(). Plain
-// number inputs throughout, not sliders (matches scenario_editor.ts's GPS
-// σ / sim speed precedent — a slider's fixed range can't usefully cover
-// both "a quick 50-run check" and "a smooth 5000-run histogram," same
-// reasoning that already ruled out a slider for sim speed).
-
 import {
   Chart,
   BarController,
@@ -37,11 +21,6 @@ Chart.register(
 
 export interface MCResultsOptions {
   postToWorker: (msg: WorkerRequest) => void
-  // Read on a Run MC click that hasn't been preceded by any init (see
-  // onRunMC()) — lets Monte Carlo init the live Simulation itself instead
-  // of requiring the user to click the topbar Run button first just to
-  // populate x_true_initial_, which had no visible connection to "fill out
-  // the MC fields and click Run MC" from the user's side.
   getConfig: () => ScenarioConfig | undefined
 }
 
@@ -49,11 +28,6 @@ const TEXT_MUTED = 'rgba(136, 145, 168, 0.9)'
 const GRID_COLOR = 'rgba(255, 255, 255, 0.06)'
 const HISTOGRAM_BINS = 15
 
-// Same rgb values as renderer/panels.ts's FILTER_COLORS (and the
-// normalized equivalents in renderer/gl_utils.ts's FILTER_COLOR_RGB used
-// for the 3D scene) — one filter runs per MC campaign (the Filter select
-// above), so the NEES/NIS line should read as "that filter's color"
-// consistently with every other place a filter's color shows up in the app.
 const MC_FILTER_LINE_COLORS: Record<MCFilterKind, string> = {
   [MCFilterKind.Kf]: 'rgb(91, 140, 255)',
   [MCFilterKind.Ekf]: 'rgb(45, 217, 196)',
@@ -81,23 +55,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): 
   return e
 }
 
-// RMS table rows sample the campaign's per-step series at a handful of
-// evenly-spaced step indices rather than every step, distinct from the
-// line-chart treatment used for NEES/NIS (those plot every step). Always
-// includes step 0 and the last step, with up to `count - 2` more spread
-// evenly between them — not fixed fractions of the run (0.25/0.5/0.75/1.0
-// of nSteps), which is what this replaced: with a small nSteps (Steps is
-// now a user-configurable field, not always the original fixed 500), those
-// fractions round to indices that skip step 0 entirely (e.g. nSteps=5
-// rounds 0.25*4=1, never 0), which read as "the table is missing the
-// start of the run" — confirmed by a live report of exactly that.
-//
-// Three regimes verified by hand: nSteps=1 collapses every fraction to
-// index 0 — old code produced 4 duplicate rows; new code dedupes via the
-// Set, producing exactly 1. nSteps < count (e.g. 3) produces one row per
-// step, all distinct, still always including 0 and nSteps-1. nSteps >=
-// count (typical — default is 500) produces `count` evenly-spaced rows
-// from 0 to nSteps-1 inclusive.
 function sampleStepIndices(nSteps: number, count: number): number[] {
   if (nSteps <= 0) return []
   const n = Math.min(count, nSteps)
@@ -122,9 +79,6 @@ function histogramBins(values: number[], bins: number): { labels: string[]; coun
   return { labels, counts }
 }
 
-// "500 steps x 10s" alone doesn't convey much without doing the
-// multiplication — mirrors scenario_editor.ts's formatSimSpeedReadout
-// precedent of translating a raw parameter into a plain-language readout.
 function formatDurationReadout(nSteps: number, dt: number): string {
   if (!Number.isFinite(nSteps) || nSteps <= 0 || !Number.isFinite(dt) || dt <= 0) return ''
   const totalSec = nSteps * dt
@@ -152,34 +106,11 @@ export class MCResultsPanel {
   private readonly neesChart: Chart
   private readonly nisChart: Chart
   private readonly rmsTableBody: HTMLTableSectionElement
-  // Set when a campaign is dispatched, cleared once its 'mc_results'
-  // response arrives — main.ts's render loop checks isRunning() every
-  // frame to decide whether to keep polling the progress counter (see
-  // McProgressReader) at all.
   private running = false
   private targetNRuns = 0
-  // dt actually used by the in-flight/last campaign — MCStats doesn't echo
-  // this back, so handleResults() needs it remembered from onRunMC() to
-  // label the RMS table / NEES/NIS chart x-axes correctly (was hardcoded
-  // to 10.0 back when dt itself was hardcoded).
   private lastDt = DEFAULTS.dt
-  // Filter actually used by the in-flight/last campaign — same reason as
-  // lastDt above (MCStats doesn't echo it back), needed by handleResults()
-  // to color the NEES/NIS lines to match.
   private lastFilter: MCFilterKind = DEFAULTS.filter
-  // Whether ScenarioEditor.getConfig() would currently succeed (a
-  // satellite/TLE is loaded) — gates the button itself, same signal and
-  // wording RunControls' own runEnabled uses. Independent of whether
-  // init_scenario() has actually been called yet (see `initialized`
-  // below): a config existing doesn't mean the engine has consumed it.
   private runEnabled = false
-  // True once the live Simulation has been init_scenario()'d at least
-  // once — either because the user clicked the topbar Run button, or
-  // because onRunMC() did it itself on a first Run MC click (see
-  // onRunMC()). Monte Carlo's initial condition is a snapshot of the live
-  // Simulation's true state (x_true_initial_, wasm_api.hpp), only
-  // populated by that call — before it's ever run once, a campaign would
-  // run against a zeroed-out state vector and produce all-NaN results.
   private initialized = false
   private readonly getConfig: () => ScenarioConfig | undefined
 
@@ -194,11 +125,6 @@ export class MCResultsPanel {
 
     const body = el('div', 'mc-body')
 
-    // Toolbar: each parameter is its own column (label on top, control
-    // below). #mc-results-container is a full-width sibling of #panels
-    // (the chart row above it), not nested in the narrow sidebar — so
-    // these columns are sized to spread across that full width (CSS grid,
-    // auto-fit) rather than packing tight on the left.
     const toolbar = el('div', 'mc-params-toolbar')
 
     this.runsInput = el('input')
@@ -362,9 +288,6 @@ export class MCResultsPanel {
     this.nisChart = this.makeBoundedLineChart(nisCanvas, 'NIS')
   }
 
-  // One toolbar column: a small label (+ info button) on top, the given
-  // control (input/select) below. control is built by the caller since
-  // each one needs different type/min/step/options wiring.
   private makeField(labelText: string, control: HTMLElement, explanation: string): HTMLElement {
     const field = el('div', 'mc-field')
     const labelRow = el('div', 'mc-field-label')
@@ -417,9 +340,6 @@ export class MCResultsPanel {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
-          // x is step index/time, formatted as "T+ (s)" the same way
-          // panels.ts's main charts and this panel's own RMS table label
-          // it — consistent across every place a campaign's time axis shows up.
           x: { type: 'category', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 }, maxTicksLimit: 5 }, title: axisTitle('T+ (s)') },
           y: { type: 'linear', grid: { color: GRID_COLOR }, ticks: { color: TEXT_MUTED, font: { size: 9 } }, title: axisTitle(yTitle) },
         },
@@ -439,17 +359,9 @@ export class MCResultsPanel {
   private onRunMC(): void {
     if (!this.runEnabled || this.running) return
 
-    // First Run MC click ever (or the first since a fresh page load):
-    // init the live Simulation ourselves rather than requiring the user
-    // to have separately clicked the topbar Run button first — that
-    // extra click had no visible connection to "fill out these fields
-    // and click Run MC" from the user's side. Subsequent clicks skip
-    // this; re-initializing on every click would reset live sim state
-    // (T+, orbit trail) out from under a user who's mid-run and just
-    // wants another MC campaign.
     if (!this.initialized) {
       const cfg = this.getConfig()
-      if (!cfg) return // runEnabled implies this should never happen
+      if (!cfg) return
       this.postToWorker({ type: 'init', payload: cfg })
       this.initialized = true
     }
@@ -472,18 +384,15 @@ export class MCResultsPanel {
     this.postToWorker({ type: 'run_monte_carlo', payload: { nRuns, seed, filter, nSteps, dt, qPos, qVel } })
   }
 
-  /** True between dispatching a campaign and its 'mc_results' response — main.ts's render loop polls progress only while this holds. */
   isRunning(): boolean {
     return this.running
   }
 
-  /** Called by ScenarioEditor whenever getConfig() availability changes — same signal/wording RunControls' own setRunEnabled uses. */
   setRunEnabled(enabled: boolean): void {
     this.runEnabled = enabled
     this.updateRunButtonState()
   }
 
-  /** Called by main.ts whenever an 'init' message goes to the worker (including ones triggered by the topbar Run button), so onRunMC() knows not to redundantly init again itself. */
   markInitialized(): void {
     this.initialized = true
   }
@@ -494,7 +403,6 @@ export class MCResultsPanel {
     this.runButton.title = this.runEnabled ? '' : 'Select a satellite or paste a TLE first'
   }
 
-  /** Called by main.ts every render frame while isRunning(), with the live mc_progress_counter() value. */
   updateProgress(completed: number): void {
     if (!this.running) return
     const clamped = Math.min(completed, this.targetNRuns)
@@ -503,7 +411,6 @@ export class MCResultsPanel {
     this.progressFill.style.width = `${pct}%`
   }
 
-  /** Called by main.ts when a 'mc_results' WorkerResponse arrives. */
   handleResults(stats: MCStats): void {
     this.running = false
     this.updateRunButtonState()

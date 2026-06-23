@@ -9,7 +9,6 @@
 
 namespace orbitforge {
 
-// Configuration passed from JS to init_scenario().
 struct ScenarioCfg {
     char   tle_line1[70]{};
     char   tle_line2[70]{};
@@ -25,20 +24,20 @@ struct ScenarioCfg {
     double sim_speed    = 1.0;
     int    seed         = -1;
 
-    // --- Phase 5: 6DOF attitude estimation (CLAUDE.md §6, §21) ---
-    double inertia_x   = 1.0;   // principal-axis inertia tensor, kg·m² (diagonal only, §18)
+    double inertia_x   = 1.0;
     double inertia_y   = 1.0;
     double inertia_z   = 1.0;
-    double gyro_sigma  = 0.001;  // rad/s, gyro measurement noise (math.md §7.4)
-    double mag_sigma   = 100.0;  // nT, magnetometer measurement noise (math.md §7.4)
-    double q_att        = 1e-6;   // process noise, attitude error (delta_theta) block
-    double q_omega       = 1e-8;   // process noise, angular velocity block
-    double init_omega_x = 0.0;    // initial true angular velocity, body-frame rad/s
+    // math.md §7.4.
+    double gyro_sigma  = 0.001;
+    // math.md §7.4.
+    double mag_sigma   = 100.0;
+    double q_att        = 1e-6;
+    double q_omega       = 1e-8;
+    double init_omega_x = 0.0;
     double init_omega_y = 0.0;
-    double init_omega_z = 0.05;   // small default spin so the attitude demo is visibly tumbling
+    double init_omega_z = 0.05;
 };
 
-// Classical orbital elements extracted from a TLE, plus its epoch.
 struct TleElements {
     double epoch_jd          = 0.0;
     double inclination_rad   = 0.0;
@@ -49,21 +48,16 @@ struct TleElements {
     double mean_motion_rad_s = 0.0;
 };
 
-// ECI position/velocity pair.
 struct EciState {
-    Eigen::Vector3d pos = Eigen::Vector3d::Zero();  // m
-    Eigen::Vector3d vel = Eigen::Vector3d::Zero();  // m/s
+    Eigen::Vector3d pos = Eigen::Vector3d::Zero();
+    Eigen::Vector3d vel = Eigen::Vector3d::Zero();
 };
 
 namespace scenario_detail {
 
-constexpr double k_deg_to_rad = 1.7453292519943295769e-2;  // pi/180
+constexpr double k_deg_to_rad = 1.7453292519943295769e-2;
 constexpr double k_two_pi     = 6.283185307179586477;
 
-// Reads `len` characters starting at `start` and parses them as a double.
-// TLE fields are fixed-width and may have leading/trailing spaces; atof
-// skips leading whitespace and stops at the first non-numeric character,
-// so trailing spaces are harmless.
 inline double parse_field(const char* line, int start, int len) {
     char buf[16] = {};
     const int n = (len < 15) ? len : 15;
@@ -71,13 +65,6 @@ inline double parse_field(const char* line, int start, int len) {
     return std::atof(buf);
 }
 
-// Julian date of a TLE epoch given as a 2-digit year and fractional day of
-// year. Standard Meeus Gregorian-calendar-to-JD conversion (Meeus,
-// "Astronomical Algorithms" ch. 7), specialized for "January 0.0 UT of
-// `year`" (month=1, day=0, treated as month 13 of the previous year per the
-// algorithm's convention) plus the fractional day-of-year offset. Verified
-// against the known reference JD(2024-01-01 00:00 UT) = 2460310.5 and
-// JD(2000-01-01 00:00 UT) = 2451544.5.
 inline double tle_epoch_to_jd(int year_2d, double day_of_year) {
     const int year = (year_2d >= 57) ? 1900 + year_2d : 2000 + year_2d;
     const int yp = year - 1;
@@ -87,12 +74,8 @@ inline double tle_epoch_to_jd(int year_2d, double day_of_year) {
     return jd0 + day_of_year;
 }
 
-}  // namespace scenario_detail
+}
 
-// Parses a two-line element set into classical orbital elements. Column
-// offsets match the standard NORAD TLE format (and web/src/data/tle_parser.ts,
-// which parses the same lines for the UI's satellite picker). Does not
-// validate checksums.
 inline TleElements parse_tle(const char* line1, const char* line2) {
     using namespace scenario_detail;
 
@@ -103,7 +86,7 @@ inline TleElements parse_tle(const char* line1, const char* line2) {
     elem.epoch_jd         = tle_epoch_to_jd(year_2d, day_of_year);
     elem.inclination_rad  = parse_field(line2, 8, 8) * k_deg_to_rad;
     elem.raan_rad         = parse_field(line2, 17, 8) * k_deg_to_rad;
-    elem.eccentricity     = parse_field(line2, 26, 7) * 1e-7;  // implied leading "0."
+    elem.eccentricity     = parse_field(line2, 26, 7) * 1e-7;
     elem.arg_perigee_rad  = parse_field(line2, 34, 8) * k_deg_to_rad;
     elem.mean_anomaly_rad = parse_field(line2, 43, 8) * k_deg_to_rad;
 
@@ -112,8 +95,6 @@ inline TleElements parse_tle(const char* line1, const char* line2) {
     return elem;
 }
 
-// Solves Kepler's equation M = E - e*sin(E) for the eccentric anomaly E via
-// Newton-Raphson, starting from E0 = M.
 inline double solve_kepler_eccentric_anomaly(double mean_anomaly_rad, double eccentricity) {
     double E = mean_anomaly_rad;
     for (int iter = 0; iter < 50; ++iter) {
@@ -126,19 +107,6 @@ inline double solve_kepler_eccentric_anomaly(double mean_anomaly_rad, double ecc
     return E;
 }
 
-// Converts classical orbital elements to an ECI state vector via the
-// standard two-body COE2RV transform (Vallado, "Fundamentals of
-// Astrodynamics and Applications", Algorithm 10).
-//
-// Deliberate simplification: this seeds the *initial* true-trajectory state
-// only. Full SGP4 was not used here because SGP4 is a
-// forward propagator, not a truth-model seed — OrbitForge's RK4 +
-// perturbations take over immediately after this single conversion. The
-// resulting epoch-state error vs. a full SGP4 seed is O(100 m), well inside
-// the initial covariance P0 used to start the filters. Consistency between
-// the seed model and the propagation model matters more here than seed
-// fidelity, so the simpler, independently-verifiable two-body conversion is
-// the better choice.
 inline EciState tle_elements_to_eci(const TleElements& elem) {
     const double n = elem.mean_motion_rad_s;
     const double a = std::cbrt(k_mu / (n * n));
@@ -183,4 +151,4 @@ inline EciState tle_elements_to_eci(const TleElements& elem) {
     return state;
 }
 
-}  // namespace orbitforge
+}

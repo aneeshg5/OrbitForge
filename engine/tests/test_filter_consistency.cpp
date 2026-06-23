@@ -1,13 +1,4 @@
-// Monte Carlo filter consistency tests.
-//
-// A filter is consistent when err_i^T P_i^{-1} err_i ~ chi²(6) each step.
-// Averaged over N=100 runs: N·NEES ~ chi²(6N=600).
-// Per-step bounds: [chi²(600, 0.025)/100, chi²(600, 0.975)/100] ≈ [5.35, 6.69]
-//   (Wilson-Hilferty approximation, math.md §8)
-//
-// Key design: process noise is INJECTED into the true trajectory (same σ as
-// filter Q), so the stochastic model is exactly matched and the filter is
-// theoretically consistent regardless of noise magnitude.
+// math.md §8.
 
 #include <gtest/gtest.h>
 #include <Eigen/Dense>
@@ -34,22 +25,7 @@ constexpr double k_min_in_frac = 0.90;
 static constexpr double k_r0 = k_re + 408e3;
 static inline double iss_v0() { return std::sqrt(k_mu / k_r0); }
 
-// q_pos: per-step process noise std dev for position [m]
-// q_vel: per-step process noise std dev for velocity [m/s]
-// These must match what make_filter() sets in Filter::Q.
-//
-// Off: index of the orbital position block in Filter's state vector (0 for
-// the historical 6-state [r,v]; 6 for Phase 5's 12-state EKF/UKF MEKF
-// [delta_theta,omega,r,v] — see ekf.hpp/ukf.hpp). This test stays an
-// orbital-only NEES check even for 12-state filters — the attitude block
-// is given a placeholder P (set inside make_filter() below where needed for
-// UKF's S=chol(P) to stay well-defined) but is never measured here and
-// (per F's exact block-diagonal structure, math.md §7.3) cannot influence
-// the orbital NEES being validated, so the Phase 1 chi²(6) bounds/result
-// still apply unchanged. Position/measurement default to the filters'
-// own constructor-set H (already position-shaped at the correct Off for
-// both the old 6-state and new 12-state filters), so this test still
-// never sets H explicitly, same as before.
+// math.md §7.3.
 template <typename Filter, int Off, typename MakeFilter>
 std::vector<double> run_mc_nees(int N, int n_steps, double dt,
                                  double sigma_gps,
@@ -85,26 +61,20 @@ std::vector<double> run_mc_nees(int N, int n_steps, double dt,
         x_true << k_r0, 0.0, 0.0, 0.0, v0, 0.0;
 
         Filter flt = make_filter();
-        // Draw initial filter state from P₀ around truth (orbital block only)
         flt.x.template segment<3>(Off)     = Eigen::Vector3d(k_r0 + pos_ic(rng), pos_ic(rng), pos_ic(rng));
         flt.x.template segment<3>(Off + 3) = Eigen::Vector3d(vel_ic(rng), v0 + vel_ic(rng), vel_ic(rng));
 
         for (int step = 0; step < n_steps; ++step) {
-            // True trajectory: propagate, then inject process noise w ~ N(0, Q)
             x_true = rk4_step(x_true, 0.0, dt, f_dyn);
             x_true[0] += proc_pos(rng);  x_true[1] += proc_pos(rng);  x_true[2] += proc_pos(rng);
             x_true[3] += proc_vel(rng);  x_true[4] += proc_vel(rng);  x_true[5] += proc_vel(rng);
 
             flt.predict(dt);
 
-            // ECI position measurement — consistent with the filter's own
-            // constructor-default H (position-shaped at Off for both the
-            // 6-state and 12-state layouts).
             Eigen::Vector3d z = x_true.head<3>() +
                 Eigen::Vector3d(gps_noise(rng), gps_noise(rng), gps_noise(rng));
             flt.update(z);
 
-            // NEES = errᵀ P⁻¹ err ~ chi²(6) per run, orbital block only.
             Eigen::Matrix<double, 6, 1> err;
             err.template head<3>() = x_true.template head<3>() - flt.x.template segment<3>(Off);
             err.template tail<3>() = x_true.template tail<3>() - flt.x.template segment<3>(Off + 3);
@@ -137,15 +107,11 @@ static void check_nees_consistency(const std::vector<double>& nees, const char* 
         << "]: " << frac << " (need >= " << k_min_in_frac << ")";
 }
 
-} // namespace
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  EKF — N=100, 500 steps, dt=10 s, GPS σ=10 m, Q_pos=1 m, Q_vel=0.01 m/s
-// ─────────────────────────────────────────────────────────────────────────────
+}
 
 TEST(EKFConsistency, NEESWithinBounds) {
-    constexpr double q_pos = 1.0;     // [m]   per-step position process noise
-    constexpr double q_vel = 0.01;    // [m/s] per-step velocity process noise
+    constexpr double q_pos = 1.0;
+    constexpr double q_vel = 0.01;
 
     const auto nees = run_mc_nees<ExtendedKalmanFilter, 6>(
         100, 500, 10.0, 10.0, q_pos, q_vel,
@@ -167,10 +133,6 @@ TEST(EKFConsistency, NEESWithinBounds) {
     check_nees_consistency(nees, "EKF");
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  UKF — same scenario
-// ─────────────────────────────────────────────────────────────────────────────
-
 TEST(UKFConsistency, NEESWithinBounds) {
     constexpr double q_pos = 1.0;
     constexpr double q_vel = 0.01;
@@ -179,21 +141,13 @@ TEST(UKFConsistency, NEESWithinBounds) {
         100, 500, 10.0, 10.0, q_pos, q_vel,
         [=] {
             UnscentedKalmanFilter ukf;
-            // Attitude block (rows/cols 0-5) gets a placeholder identity P
-            // purely so S=chol(P) below stays well-defined — never measured
-            // in this orbital-only test; see run_mc_nees's doc comment.
             ukf.P.setIdentity();
             for (int i = 6; i < 9; ++i) ukf.P(i, i) = 100.0 * 100.0;
             for (int i = 9; i < 12; ++i) ukf.P(i, i) = 1.0;
             {
                 Eigen::LLT<Eigen::Matrix<double, 12, 12>> llt(ukf.P);
-                ukf.S = llt.matrixL();   // S = chol(P₀)
+                ukf.S = llt.matrixL();
             }
-            // UKF::predict() Cholesky-factors the FULL Q every tick (SR-form
-            // process-noise injection) — a singular Q (attitude block left
-            // at exactly 0) corrupts the entire QR-based S reconstruction,
-            // not just that block. Tiny placeholder, irrelevant to the
-            // orbital NEES this test actually checks (see run_mc_nees's doc).
             ukf.Q.setZero();
             ukf.Q.diagonal().setConstant(1e-12);
             for (int i = 6; i < 9; ++i) ukf.Q(i, i) = q_pos * q_pos;

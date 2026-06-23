@@ -11,11 +11,6 @@ source "$EMSDK_DIR/emsdk_env.sh"
 
 mkdir -p "$OUT_DIR"
 
-# Eigen is header-only — any compiler (including em++) can consume the
-# system-installed headers directly, no WASM-specific build needed. Resolve
-# the same candidate paths native builds use (Homebrew on macOS, apt on
-# Ubuntu CI) rather than hardcoding one path; override with EIGEN_INCLUDE if
-# neither matches.
 if [ -z "${EIGEN_INCLUDE:-}" ]; then
     for candidate in /usr/include/eigen3 /opt/homebrew/include/eigen3 /usr/local/include/eigen3; do
         if [ -d "$candidate" ]; then

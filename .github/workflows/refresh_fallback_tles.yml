@@ -2,10 +2,6 @@ name: Refresh fallback TLEs
 
 on:
   schedule:
-    # Mondays 06:00 UTC. CelesTrak publishes 1-4x/day, so weekly is a
-    # maintenance cadence, not a freshness requirement — the cached entries
-    # are a fallback for when the live per-user fetch fails, not the
-    # primary path (see web/src/data/tle_feed.ts).
     - cron: '0 6 * * 1'
   workflow_dispatch:
 

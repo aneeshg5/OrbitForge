@@ -5,8 +5,6 @@
 
 namespace orbitforge::dynamics {
 
-// 7-band exponential atmosphere model.
-// Columns: h_base (m), h_scale (m), rho_base (kg/m³)
 struct AtmoBand {
     double h_base;
     double h_scale;
@@ -22,7 +20,7 @@ static constexpr AtmoBand k_atmo_bands[7] = {
     {  600000.0,  7714.0, 1.137e-13},
     {  800000.0, 16129.0, 5.245e-14},
 };
-static constexpr double k_atmo_ceiling = 1.0e6; // 1000 km
+static constexpr double k_atmo_ceiling = 1.0e6;
 
 double atmospheric_density(double altitude_m) {
     if (altitude_m >= k_atmo_ceiling) return 0.0;
@@ -44,8 +42,6 @@ double altitude_from_eci(const Eigen::Vector3d& pos_eci) {
 }
 
 Eigen::Vector3d sun_direction_eci(double julian_date) {
-    // Simplified solar longitude (degrees), accurate to ~0.01°.
-    // See Vallado "Fundamentals of Astrodynamics" §5.1.
     const double T = (julian_date - orbitforge::k_j2000_jd) / 36525.0;
     const double lambda_deg = 280.460 + 36000.771 * T;
     const double M_deg      = 357.528 + 35999.050 * T;
@@ -61,4 +57,4 @@ Eigen::Vector3d sun_direction_eci(double julian_date) {
     };
 }
 
-} // namespace orbitforge::dynamics
+}

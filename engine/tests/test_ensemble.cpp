@@ -12,9 +12,9 @@ using namespace orbitforge::monte_carlo;
 using namespace orbitforge::dynamics;
 
 namespace {
-constexpr double k_r0 = k_re + 408e3;  // ISS-like circular orbit radius
+constexpr double k_r0 = k_re + 408e3;
 double iss_v0() { return std::sqrt(k_mu / k_r0); }
-}  // namespace
+}
 
 TEST(Ensemble, SetGetRoundTrip) {
     EnsembleState<4> ens;
@@ -24,9 +24,6 @@ TEST(Ensemble, SetGetRoundTrip) {
     EXPECT_TRUE(ens.get(2).isApprox(x));
 }
 
-// One run inside an ensemble of size 1 must match an independent rk4_step
-// call exactly — the ensemble machinery (get/set, SoA round-trip) must not
-// perturb the numerics.
 TEST(Ensemble, SingleRunMatchesDirectRk4Step) {
     PerturbationConfig cfg;
     cfg.enable_j2 = true;
@@ -51,9 +48,6 @@ TEST(Ensemble, SingleRunMatchesDirectRk4Step) {
     EXPECT_TRUE(ens.get(0).isApprox(expected, 1e-12));
 }
 
-// Runs must propagate independently — no cross-contamination between SoA
-// lanes. Two runs start at different points on the same circular orbit;
-// after one step each must have moved along its own trajectory only.
 TEST(Ensemble, RunsAreIndependent) {
     PerturbationConfig cfg;
     cfg.enable_j2 = false;
@@ -63,7 +57,7 @@ TEST(Ensemble, RunsAreIndependent) {
     const double v0 = iss_v0();
     Eigen::Matrix<double, 6, 1> x0_a, x0_b;
     x0_a << k_r0, 0.0, 0.0, 0.0, v0, 0.0;
-    x0_b << 0.0, k_r0, 0.0, -v0, 0.0, 0.0;  // 90 degrees ahead, same orbit
+    x0_b << 0.0, k_r0, 0.0, -v0, 0.0, 0.0;
 
     EnsembleState<2> ens;
     ens.set(0, x0_a);
@@ -81,14 +75,9 @@ TEST(Ensemble, RunsAreIndependent) {
 
     EXPECT_TRUE(ens.get(0).isApprox(expected_a, 1e-12));
     EXPECT_TRUE(ens.get(1).isApprox(expected_b, 1e-12));
-    // And the two results must differ from each other.
     EXPECT_FALSE(ens.get(0).isApprox(ens.get(1), 1.0));
 }
 
-// Kepler closure check (same criterion as test_rk4.cpp) run through the
-// ensemble path for N=8 identical orbits, one full ISS period — confirms
-// the SoA batch loop doesn't accumulate extra numerical error vs the
-// already-validated single-run RK4 path.
 TEST(Ensemble, KeplerClosureOverFullPeriod) {
     PerturbationConfig cfg;
     cfg.enable_j2 = false;
@@ -122,11 +111,6 @@ TEST(Ensemble, KeplerClosureOverFullPeriod) {
     }
 }
 
-// step_ensemble_fast() (batched gravity+J2 array kernel) must produce the
-// same result as step_ensemble() (generic per-run Eigen path) to within
-// floating-point reordering tolerance — it is a performance-motivated
-// reformulation of the identical RK4(gravity+J2) math, not a different
-// model.
 TEST(Ensemble, FastPathMatchesGenericPathWithJ2) {
     PerturbationConfig cfg;
     cfg.enable_j2 = true;
@@ -149,7 +133,7 @@ TEST(Ensemble, FastPathMatchesGenericPathWithJ2) {
     step_ensemble(ens_generic, n_runs, 10.0, k_j2000_jd, cfg);
 
     EnsembleWorkspace<n_runs> ws;
-    step_ensemble_fast(ens_fast, n_runs, 10.0, /*enable_j2=*/true, ws);
+    step_ensemble_fast(ens_fast, n_runs, 10.0, true, ws);
 
     for (size_t i = 0; i < n_runs; ++i) {
         EXPECT_TRUE(ens_fast.get(i).isApprox(ens_generic.get(i), 1e-9))
@@ -176,7 +160,7 @@ TEST(Ensemble, FastPathMatchesGenericPathTwoBodyOnly) {
     step_ensemble(ens_generic, n_runs, 10.0, k_j2000_jd, cfg);
 
     EnsembleWorkspace<n_runs> ws;
-    step_ensemble_fast(ens_fast, n_runs, 10.0, /*enable_j2=*/false, ws);
+    step_ensemble_fast(ens_fast, n_runs, 10.0, false, ws);
 
     for (size_t i = 0; i < n_runs; ++i) {
         EXPECT_TRUE(ens_fast.get(i).isApprox(ens_generic.get(i), 1e-9));

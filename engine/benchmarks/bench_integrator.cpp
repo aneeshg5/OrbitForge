@@ -27,16 +27,12 @@ static double bench_gravity_step(int iterations) {
     }
     auto t1 = Clock::now();
 
-    // Use accel to prevent optimization
     volatile double sink = accel.norm();
     (void)sink;
 
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / iterations;
 }
 
-// Full RK4 step (6-state, J2+drag) — 4 compute_acceleration calls per step.
-// Target is < 2 μs, distinct from the raw compute_acceleration call timed
-// above.
 static double bench_rk4_step(int iterations) {
     PerturbationConfig cfg;
     cfg.enable_j2   = true;
@@ -65,10 +61,6 @@ static double bench_rk4_step(int iterations) {
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / iterations;
 }
 
-// Single-threaded push+pop pairs, back to back — measures the raw cost of
-// the atomic operations themselves, not thread-scheduling overhead from a
-// real producer/consumer pair (that's a different, much noisier
-// measurement).
 static double bench_ring_buffer_throughput(int iterations) {
     orbitforge::memory::SPSCRingBuffer<int, 1024> rb;
     int sink = 0;
@@ -84,7 +76,7 @@ static double bench_ring_buffer_throughput(int iterations) {
     (void)vsink;
 
     const double seconds = std::chrono::duration<double>(t1 - t0).count();
-    return iterations / seconds;  // frames/sec (push+pop pairs/sec)
+    return iterations / seconds;
 }
 
 namespace orbitforge::benchmarks {

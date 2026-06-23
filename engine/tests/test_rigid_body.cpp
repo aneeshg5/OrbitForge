@@ -11,15 +11,11 @@ using namespace orbitforge::dynamics;
 
 namespace {
 
-// Asymmetric inertia tensor (all three principal moments distinct) so the
-// tests exercise genuine gyroscopic coupling, not a degenerate single-axis
-// spin that would conserve momentum/energy trivially even with a buggy
-// cross-coupling term.
-const InertiaTensor k_test_inertia{/*ix=*/1.0, /*iy=*/2.0, /*iz=*/3.0};
+const InertiaTensor k_test_inertia{1.0, 2.0, 3.0};
 
 AttitudeState make_initial_state(const Eigen::Vector3d& omega0) {
     AttitudeState x;
-    x << 0.0, 0.0, 0.0, 1.0,            // q = identity, coeffs() order (x,y,z,w)
+    x << 0.0, 0.0, 0.0, 1.0,
          omega0.x(), omega0.y(), omega0.z();
     return x;
 }
@@ -37,13 +33,8 @@ double kinetic_energy(const AttitudeState& x, const InertiaTensor& inertia) {
                   inertia.iz * omega.z() * omega.z());
 }
 
-// Propagates via RK4 for duration T at fixed step h, renormalizing the
-// quaternion block after every step (q has no effect on omega's dynamics
-// for torque-free motion, but a real "true trajectory" integrator must
-// still control its drift off the unit-quaternion manifold — see
-// dynamics/rigid_body.hpp's AttitudeState doc and CLAUDE.md §6).
 AttitudeState propagate(const AttitudeState& x0, const InertiaTensor& inertia, double T, double h) {
-    auto f = [&inertia](double /*t*/, const AttitudeState& s) {
+    auto f = [&inertia](double , const AttitudeState& s) {
         return attitude_derivative(s, inertia);
     };
 
@@ -63,13 +54,13 @@ AttitudeState propagate(const AttitudeState& x0, const InertiaTensor& inertia, d
     return x;
 }
 
-} // namespace
+}
 
 TEST(RigidBody, AngularMomentumConservation) {
     const AttitudeState x0 = make_initial_state(Eigen::Vector3d(0.5, 0.3, -0.2));
     const double L0 = angular_momentum_norm(x0, k_test_inertia);
 
-    const AttitudeState xf = propagate(x0, k_test_inertia, /*T=*/10.0, /*h=*/0.01);
+    const AttitudeState xf = propagate(x0, k_test_inertia, 10.0, 0.01);
     const double Lf = angular_momentum_norm(xf, k_test_inertia);
 
     EXPECT_LT(std::abs((Lf - L0) / L0), 1e-8);
@@ -79,7 +70,7 @@ TEST(RigidBody, KineticEnergyConservation) {
     const AttitudeState x0 = make_initial_state(Eigen::Vector3d(0.5, 0.3, -0.2));
     const double E0 = kinetic_energy(x0, k_test_inertia);
 
-    const AttitudeState xf = propagate(x0, k_test_inertia, /*T=*/10.0, /*h=*/0.01);
+    const AttitudeState xf = propagate(x0, k_test_inertia, 10.0, 0.01);
     const double Ef = kinetic_energy(xf, k_test_inertia);
 
     EXPECT_LT(std::abs((Ef - E0) / E0), 1e-8);
@@ -87,17 +78,14 @@ TEST(RigidBody, KineticEnergyConservation) {
 
 TEST(RigidBody, QuaternionStaysNormalized) {
     const AttitudeState x0 = make_initial_state(Eigen::Vector3d(0.5, 0.3, -0.2));
-    const AttitudeState xf = propagate(x0, k_test_inertia, /*T=*/10.0, /*h=*/0.01);
+    const AttitudeState xf = propagate(x0, k_test_inertia, 10.0, 0.01);
     const math::Quat q(xf[3], xf[0], xf[1], xf[2]);
     EXPECT_NEAR(q.norm(), 1.0, 1e-10);
 }
 
 TEST(RigidBody, SingleAxisSpinIsTorqueFreeFixedPoint) {
-    // Spin purely about a principal axis: Euler's equation degenerates to
-    // omega_dot = 0 exactly (no gyroscopic coupling when only one
-    // component is nonzero), so omega must stay constant.
     const AttitudeState x0 = make_initial_state(Eigen::Vector3d(0.0, 0.0, 0.7));
-    const AttitudeState xf = propagate(x0, k_test_inertia, /*T=*/5.0, /*h=*/0.01);
+    const AttitudeState xf = propagate(x0, k_test_inertia, 5.0, 0.01);
     EXPECT_TRUE(xf.tail<3>().isApprox(Eigen::Vector3d(0.0, 0.0, 0.7), 1e-9));
 }
 

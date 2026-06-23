@@ -1,17 +1,6 @@
-// Service worker: caches the WASM binary, glue JS, and static shell so the
-// app keeps working offline after the first load. Cache-first for the
-// WASM/JS/texture assets (they're content-addressed by version below, not
-// by URL hashing, so a CACHE_NAME bump is what invalidates them) and
-// network-first for everything else.
-
 const CACHE_NAME = 'orbitforge-v1'
 const PRECACHE_URLS = ['/', '/index.html', '/manifest.json', '/orbitforge.js', '/orbitforge.wasm']
 
-// lib.dom.d.ts (this project's configured lib — see tsconfig.json) doesn't
-// know about service-worker-specific event types (ExtendableEvent,
-// FetchEvent), and adding lib.webworker.d.ts alongside it would conflict
-// over the global `self`/`addEventListener` declarations. Casting locally
-// avoids needing a second tsconfig just for this one file.
 interface ExtendableEventLike extends Event {
   waitUntil(promise: Promise<unknown>): void
 }

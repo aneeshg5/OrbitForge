@@ -61,7 +61,3 @@ TEST(PoolAllocator, DeallocateThenAllocateReturnsSameBlock) {
     pool.deallocate(c);
 }
 
-// No EXPECT_DEATH test for the double-free assert: fork()-based GTest death
-// tests hang under a sandboxed shell. Double-free correctness is covered
-// above by FillFreeRefillNoDoubleFreeCorrectReuse (every reused block is
-// distinct).

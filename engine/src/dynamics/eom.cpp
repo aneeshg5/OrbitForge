@@ -45,7 +45,6 @@ Eigen::Vector3d compute_drag(
     const double rho = atmospheric_density(alt);
     if (rho == 0.0) return Eigen::Vector3d::Zero();
 
-    // Velocity relative to rotating atmosphere: v_rel = v - ω_E × r
     const Eigen::Vector3d omega_earth{0.0, 0.0, orbitforge::k_omega_e};
     const Eigen::Vector3d v_rel = vel_eci - omega_earth.cross(pos_eci);
 
@@ -87,4 +86,4 @@ Eigen::Vector3d compute_acceleration(
     return accel;
 }
 
-} // namespace orbitforge::dynamics
+}

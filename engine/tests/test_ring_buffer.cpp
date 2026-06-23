@@ -28,7 +28,7 @@ TEST(RingBuffer, ClearResetsToEmpty) {
     int item = -1;
     EXPECT_FALSE(rb.pop(item));
     EXPECT_EQ(rb.size(), 0u);
-    for (int i = 0; i < 8; ++i) ASSERT_TRUE(rb.push(i));  // full capacity available again
+    for (int i = 0; i < 8; ++i) ASSERT_TRUE(rb.push(i));
 }
 
 TEST(RingBuffer, EmptyBufferPopFails) {
@@ -47,7 +47,6 @@ TEST(RingBuffer, FullBufferRejectsPush) {
     int item = -1;
     ASSERT_TRUE(rb.pop(item));
     EXPECT_EQ(item, 0);
-    // One slot freed — push should succeed again.
     EXPECT_TRUE(rb.push(99));
 }
 
@@ -61,7 +60,6 @@ TEST(RingBuffer, MultiThreadProducerConsumerNoLoss) {
     std::thread producer([&rb] {
         for (size_t i = 0; i < k_items; ++i) {
             while (!rb.push(i)) {
-                // full — spin until the consumer drains a slot.
             }
         }
     });

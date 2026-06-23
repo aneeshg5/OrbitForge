@@ -1,8 +1,3 @@
-// Orbit path renderer: one GL_LINE_STRIP per trajectory (true, KF, EKF,
-// UKF), built up from the ECI positions streamed in each StateFrame.
-// Positions arrive in meters; SCENE_SCALE converts to the same scene units
-// earth.ts's unit sphere uses.
-
 import { createProgram, eciToScene, type Mat4, SCENE_SCALE, FILTER_COLOR_RGB } from './gl_utils.js'
 
 const VERTEX_SRC = `#version 300 es
@@ -18,11 +13,6 @@ void main() {
 }
 `
 
-// The true path is rendered solid white rather than dashed — a real dash
-// pattern needs a per-vertex "distance along path" attribute and
-// discard-based stippling in the fragment shader, which adds real
-// complexity for a cosmetic distinction already covered by the true
-// path's distinct (white vs. blue/teal/orange) color.
 const FRAGMENT_SRC = `#version 300 es
 precision highp float;
 
@@ -66,9 +56,6 @@ class Path {
       this.writeIdx = this.count
       this.count++
     } else {
-      // Buffer full: shift the window forward by dropping the oldest point.
-      // Simple ring-less compaction — orbit paths are visual history, not a
-      // performance-critical hot path, so an O(n) memmove per overflow is fine.
       this.buf.copyWithin(0, 3, this.buf.length)
       this.writeIdx = this.count - 1
     }
@@ -123,7 +110,6 @@ export class OrbitPathRenderer {
     this.uColor = gl.getUniformLocation(this.program, 'u_color')
   }
 
-  /** position is ECI meters [x, y, z] — see gl_utils.eciToScene for the axis remap. */
   addPoint(kind: PathKind, position: readonly [number, number, number]): void {
     const [x, y, z] = eciToScene(position)
     this.paths[kind].addPoint(x * SCENE_SCALE, y * SCENE_SCALE, z * SCENE_SCALE)

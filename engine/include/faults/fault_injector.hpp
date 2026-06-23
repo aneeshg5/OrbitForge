@@ -16,9 +16,9 @@ enum class FaultType : uint8_t {
 
 struct FaultConfig {
     FaultType type      = FaultType::none;
-    double    onset_t   = 0.0;   // simulation time of fault onset, seconds
-    double    duration  = 0.0;   // seconds; 0 = instantaneous
-    double    magnitude = 0.0;   // fault-specific parameter
+    double    onset_t   = 0.0;
+    double    duration  = 0.0;
+    double    magnitude = 0.0;
 };
 
 // Thread-safe single-element mailbox: the UI thread calls
@@ -35,9 +35,6 @@ public:
         pending_.store(true, std::memory_order_release);
     }
 
-    // Returns true and fills `out` if a fault was pending; clears the
-    // pending flag in that case. Returns false (leaving `out` untouched)
-    // if nothing was pending.
     bool try_take(FaultConfig& out) noexcept {
         if (!pending_.load(std::memory_order_acquire)) return false;
         out = staged_;
@@ -50,4 +47,4 @@ private:
     std::atomic<bool> pending_{false};
 };
 
-}  // namespace orbitforge::faults
+}

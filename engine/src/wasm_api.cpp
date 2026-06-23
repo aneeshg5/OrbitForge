@@ -13,8 +13,8 @@ namespace {
 
 void seed_filter(filters::FilterBase<6, 3>& filter, const Eigen::Matrix<double, 6, 1>& x0,
                   double q_pos, double q_vel, double gps_sigma) {
-    constexpr double k_p0_pos = 100.0 * 100.0;  // 100 m std dev, squared
-    constexpr double k_p0_vel = 1.0 * 1.0;      // 1 m/s std dev, squared
+    constexpr double k_p0_pos = 100.0 * 100.0;
+    constexpr double k_p0_vel = 1.0 * 1.0;
 
     filter.x = x0;
     filter.P.setZero();
@@ -26,25 +26,17 @@ void seed_filter(filters::FilterBase<6, 3>& filter, const Eigen::Matrix<double, 
     filter.R = Eigen::Matrix3d::Identity() * (gps_sigma * gps_sigma);
 }
 
-// Phase 5: seeds EKF/UKF's 12-state MEKF — [delta_theta(0-2), omega(3-5),
-// r(6-8), v(9-11)]. Initial attitude uncertainty (30 deg, 0.01 rad/s) is a
-// fixed default, not yet user-configurable (no UI control for it exists —
-// matches the existing precedent of p0_pos/p0_vel above also being fixed
-// constants rather than ScenarioCfg fields). R is set to the GPS default
-// here; Simulation::step() overwrites H/R before each individual
-// update() call (GPS, gyro, magnetometer all share one R slot per filter,
-// swapped per measurement type — see FilterBase's doc).
 template <typename Filter>
 void seed_filter_6dof(Filter& filter, const Eigen::Matrix<double, 6, 1>& x0, const ScenarioCfg& cfg) {
-    constexpr double k_p0_att   = 0.3 * 0.3;     // ~17 deg std dev, squared (rad^2)
-    constexpr double k_p0_omega = 0.01 * 0.01;   // rad/s, squared
+    constexpr double k_p0_att   = 0.3 * 0.3;
+    constexpr double k_p0_omega = 0.01 * 0.01;
     constexpr double k_p0_pos   = 100.0 * 100.0;
     constexpr double k_p0_vel   = 1.0 * 1.0;
 
     filter.x.setZero();
     filter.x.template segment<3>(6) = x0.template head<3>();
     filter.x.template segment<3>(9) = x0.template tail<3>();
-    filter.P.setIdentity();  // overwritten on-diagonal below; off-diagonal stays 0
+    filter.P.setIdentity();
     filter.P.diagonal().template segment<3>(0).setConstant(k_p0_att);
     filter.P.diagonal().template segment<3>(3).setConstant(k_p0_omega);
     filter.P.diagonal().template segment<3>(6).setConstant(k_p0_pos);
@@ -59,7 +51,7 @@ void seed_filter_6dof(Filter& filter, const Eigen::Matrix<double, 6, 1>& x0, con
     filter.q_ref = math::Quat::Identity();
 }
 
-}  // namespace
+}
 
 Simulation::Simulation() = default;
 
@@ -79,8 +71,7 @@ void Simulation::init_filters() {
     ukf_.julian_date = epoch_jd_;
     ukf_.S = ukf_.P.llt().matrixL();
 
-    // Phase 5: "true" attitude trajectory, independent of x_true_ (math.md
-    // §7.2 — torque-free rotation doesn't depend on orbital state).
+    // math.md §7.2.
     inertia_ = dynamics::InertiaTensor{cfg_.inertia_x, cfg_.inertia_y, cfg_.inertia_z};
     x_true_att_.head<4>() = math::Quat::Identity().coeffs();
     x_true_att_.tail<3>() = Eigen::Vector3d(cfg_.init_omega_x, cfg_.init_omega_y, cfg_.init_omega_z);
@@ -91,7 +82,7 @@ void Simulation::init_filters() {
 }
 
 void Simulation::init_scenario(const ScenarioCfg& cfg) {
-    pause();  // stop any running loop before reconfiguring
+    pause();
 
     cfg_ = cfg;
 
@@ -116,7 +107,6 @@ void Simulation::init_scenario(const ScenarioCfg& cfg) {
     fault_applied_once_ = false;
     faults::FaultConfig drained;
     while (fault_queue_.try_take(drained)) {
-        // drop any fault left over from a previous scenario
     }
 
     init_filters();
@@ -150,11 +140,9 @@ void Simulation::set_sim_speed(double sim_speed) {
 }
 
 void Simulation::run_monte_carlo(const monte_carlo::MCConfig& req_cfg) {
-    pause();  // see run_monte_carlo()'s declaration comment in wasm_api.hpp
+    pause();
 
     monte_carlo::MCConfig mc_cfg = req_cfg;
-    // Always inherited from the live scenario, never independently
-    // configurable in the MC panel — see wasm_api.hpp's doc comment.
     mc_cfg.gps_sigma = cfg_.gps_sigma;
     mc_cfg.x0        = x_true_initial_;
 
@@ -182,7 +170,7 @@ void Simulation::step(double dt) {
     if (fault_queue_.try_take(new_fault)) {
         active_fault_ = new_fault;
         fault_applied_once_ = false;
-        perturb_true_.drag_coeff = perturb_nominal_.drag_coeff;  // clear any prior drag fault
+        perturb_true_.drag_coeff = perturb_nominal_.drag_coeff;
     }
 
     auto reported_fault = faults::FaultType::none;
@@ -223,14 +211,6 @@ void Simulation::step(double dt) {
                 break;
             }
             case faults::FaultType::sensor_bias: {
-                // Persistent GPS measurement bias (meters, X-axis ECEF) —
-                // distinct from gps_spike (single bad reading) and
-                // gps_dropout (no signal): a constant calibration-style
-                // offset added to every GPS reading from onset onward.
-                // Originally targeted IMU accelerometer bias, but no
-                // filter here fuses IMU measurements (GPS-position-only),
-                // so that would have had no observable effect — repointed
-                // at the one sensor the filters actually consume.
                 const bool persists = (active_fault_.duration <= 0.0) ||
                     (t_now < active_fault_.onset_t + active_fault_.duration);
                 gps_bias_offset = persists ? active_fault_.magnitude : 0.0;
@@ -242,10 +222,9 @@ void Simulation::step(double dt) {
         }
     }
 
-    // True trajectory: deterministic RK4 + perturbations — this is ground truth.
     const double jd_now = epoch_jd_ + t_now / k_sec_per_day;
     const dynamics::PerturbationConfig true_cfg = perturb_true_;
-    auto true_dyn = [&true_cfg, jd_now](double /*t*/, const Eigen::Matrix<double, 6, 1>& s) {
+    auto true_dyn = [&true_cfg, jd_now](double , const Eigen::Matrix<double, 6, 1>& s) {
         Eigen::Matrix<double, 6, 1> ds;
         ds.head<3>() = s.tail<3>();
         ds.tail<3>() = dynamics::compute_acceleration(s.head<3>(), s.tail<3>(), jd_now, true_cfg);
@@ -254,16 +233,13 @@ void Simulation::step(double dt) {
     x_true_ = rk4_step(x_true_, 0.0, dt, true_dyn);
 
     if (apply_maneuver_now) {
-        // Impulsive delta-v applied prograde (along current velocity),
-        // unseen by the filters — they only ever see the GPS measurement.
         x_true_.tail<3>() += active_fault_.magnitude * x_true_.tail<3>().normalized();
     }
 
-    // Phase 5: "true" attitude trajectory — independent RK4 step (math.md
-    // §7.2), fully decoupled from x_true_ above.
+    // math.md §7.2.
     {
         const dynamics::InertiaTensor inertia = inertia_;
-        auto att_dyn = [&inertia](double /*t*/, const dynamics::AttitudeState& s) {
+        auto att_dyn = [&inertia](double , const dynamics::AttitudeState& s) {
             return dynamics::attitude_derivative(s, inertia);
         };
         x_true_att_ = rk4_step(x_true_att_, 0.0, dt, att_dyn);
@@ -311,12 +287,6 @@ void Simulation::step(double dt) {
             const Eigen::Matrix3d S = H * P * H.transpose() + R;
             return nu.dot(S.ldlt().solve(nu));
         };
-        // NIS uses dynamically-sized Eigen::MatrixXd/VectorXd views purely
-        // to share one lambda across KF's 6-state and EKF/UKF's 12-state —
-        // a deliberate, deliberately-contained exception to §20's "never
-        // MatrixXd in engine/" rule: this runs once per tick (not the hot
-        // predict/update path) and avoids three near-duplicate copies of
-        // the same five-line computation.
         frame.kf_nis  = nis(kf_.x, kf_.P, H_kf, kf_.R);
         frame.ekf_nis = nis(ekf_.x, ekf_.P, H_6dof, ekf_.R);
         frame.ukf_nis = nis(ukf_.x, ukf_.P, H_6dof, ukf_.R);
@@ -326,9 +296,6 @@ void Simulation::step(double dt) {
         ukf_.update(z);
     }
 
-    // Phase 5: gyro + magnetometer updates, EKF/UKF only (KF has no
-    // attitude state to update, §6.1) — fire every tick, no dropout fault
-    // modeled for these yet (§9's fault list only covers GPS/IMU/drag).
     {
         const Eigen::Vector3d z_gyro = gyro_.measure(omega_true, dt);
         Eigen::Matrix<double, 3, 12> H_gyro = Eigen::Matrix<double, 3, 12>::Zero();
@@ -355,9 +322,7 @@ void Simulation::step(double dt) {
         mag_update(ekf_);
         mag_update(ukf_);
 
-        // MEKF reset (math.md §7.3): fold all of this tick's accumulated
-        // delta_theta correction into q_ref once, after every update()
-        // call above — not after each one individually.
+        // math.md §7.3.
         ekf_.reset_attitude_error();
         ukf_.reset_attitude_error();
     }
@@ -394,7 +359,7 @@ Simulation& global_simulation() {
     static Simulation sim;
     return sim;
 }
-}  // namespace
+}
 
 void init_scenario(const ScenarioCfg& cfg) { global_simulation().init_scenario(cfg); }
 void start_simulation() { global_simulation().start(); }
@@ -411,21 +376,13 @@ void run_monte_carlo(const monte_carlo::MCConfig& req_cfg) { global_simulation()
 const monte_carlo::MCStats& get_mc_results() { return global_simulation().get_mc_results(); }
 size_t get_mc_n_runs() { return global_simulation().get_mc_n_runs(); }
 
-}  // namespace orbitforge
+}
 
 #ifdef __EMSCRIPTEN__
 #include <cstdio>
 
 #include <emscripten/emscripten.h>
 
-// The build exports ccall/cwrap (EXPORTED_RUNTIME_METHODS), and the JS side
-// (wasm_types.ts) already commits to the ccall calling convention
-// (OrbitForgeModule.ccall/cwrap, not embind value objects). These
-// extern "C" + EMSCRIPTEN_KEEPALIVE exports are what ccall('init_scenario',
-// ...) etc. resolve to — matching the TS bridge rather than embind's
-// EMSCRIPTEN_BINDINGS macro. UNVERIFIED: no Emscripten toolchain installed
-// in this dev environment — smoke-test these exports in CI before relying
-// on them.
 extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
@@ -433,10 +390,6 @@ void init_scenario(const char* tle_line1, const char* tle_line2, double gps_sigm
                     double imu_sigma, int enable_j2, int enable_drag, int enable_srp,
                     double drag_coeff, double area_to_mass, double q_pos, double q_vel,
                     double sim_speed, int seed,
-                    // Phase 5: 6DOF (CLAUDE.md §21) — appended after the
-                    // Phase 1-4 params so existing positional ccall sites
-                    // would only break if they don't pass these, not
-                    // silently misread an earlier argument.
                     double inertia_x, double inertia_y, double inertia_z,
                     double gyro_sigma, double mag_sigma, double q_att, double q_omega,
                     double init_omega_x, double init_omega_y, double init_omega_z) {
@@ -501,22 +454,6 @@ double get_sim_time() { return orbitforge::get_sim_time(); }
 EMSCRIPTEN_KEEPALIVE
 int is_running() { return orbitforge::is_running() ? 1 : 0; }
 
-// run_monte_carlo blocks the calling worker thread until the campaign
-// completes — it does not return early and post a
-// separate completion message; ccall('run_monte_carlo', ...) is a
-// synchronous call on the JS side, same as the other void exports here.
-// MCStats arrays are exposed the same way the ring buffer is (raw pointer
-// + count, not a copy): the returned uintptr_t is a byte offset into WASM
-// linear memory, valid until the next run_monte_carlo() call reallocates
-// the underlying std::vector.
-// filter_kind: orbitforge::monte_carlo::FilterKind's underlying int value
-// (0=kf, 1=ekf, 2=ukf — its declaration order, mc_runner.hpp). seed<0 means
-// "fresh every call" (std::random_device, a real random draw — unlike the
-// engine-internal MCConfig::seed, which has no such sentinel and always
-// means exactly what it says); seed>=0 reproduces the same campaign every
-// time. Bounds below are this boundary's own validation (CLAUDE.md §20 —
-// "validate at system boundaries"), not reused from anywhere else: this is
-// user input from the MC panel, not an internal call.
 EMSCRIPTEN_KEEPALIVE
 void run_monte_carlo(int n_runs, int seed, int filter_kind, int n_steps, double dt, double q_pos, double q_vel) {
     orbitforge::monte_carlo::MCConfig cfg;
@@ -532,10 +469,7 @@ void run_monte_carlo(int n_runs, int seed, int filter_kind, int n_steps, double 
     orbitforge::run_monte_carlo(cfg);
 }
 
-// Address of mc_progress_counter()'s singleton, stable from program start —
-// callers fetch this once (not per-campaign) and poll it directly off the
-// shared WASM heap via Atomics while run_monte_carlo()'s blocking ccall is
-// in flight on the worker thread; see worker.ts/main.ts for the read side.
+// Polled directly off the shared WASM heap via Atomics.
 EMSCRIPTEN_KEEPALIVE
 uintptr_t get_mc_progress_ptr() {
     return reinterpret_cast<uintptr_t>(&orbitforge::monte_carlo::mc_progress_counter());
@@ -592,5 +526,5 @@ double get_mc_nis_upper() {
     return orbitforge::monte_carlo::nis_bounds(orbitforge::get_mc_n_runs()).upper;
 }
 
-}  // extern "C"
-#endif  // __EMSCRIPTEN__
+}
+#endif

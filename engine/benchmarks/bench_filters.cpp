@@ -17,7 +17,7 @@ using orbitforge::filters::UnscentedKalmanFilter;
 
 namespace {
 
-constexpr double k_dt = 10.0;  // seconds, matches real-time sim tick
+constexpr double k_dt = 10.0;
 
 Eigen::Matrix<double, 6, 1> iss_state() {
     const double r0 = orbitforge::k_re + 408e3;
@@ -38,12 +38,6 @@ void configure(KalmanFilter& kf) {
     for (int i = 0; i < 3; ++i) kf.R(i, i) = 100.0;
 }
 
-// Phase 5: EKF/UKF are 12-state MEKF — [delta_theta(0-2), omega(3-5),
-// r(6-8), v(9-11)] (see ekf.hpp/ukf.hpp). P/Q/R below are uniform across
-// all 12 states (setIdentity()*scale), so no separate attitude-block
-// placeholder is needed the way mc_runner.cpp/test_filter_consistency.cpp
-// require — this benchmark just measures raw step cost, not consistency.
-
 void configure(ExtendedKalmanFilter& ekf) {
     ekf.x.setZero();
     ekf.x.segment<3>(6) = iss_state().head<3>();
@@ -55,7 +49,7 @@ void configure(ExtendedKalmanFilter& ekf) {
     for (int i = 9; i < 12; ++i) ekf.Q(i, i) = 1e-8;
     ekf.R.setZero();
     for (int i = 0; i < 3; ++i) ekf.R(i, i) = 100.0;
-    ekf.perturb_cfg.enable_j2   = true;   // matches EKF's analytical Jacobian (gravity+J2)
+    ekf.perturb_cfg.enable_j2   = true;
     ekf.perturb_cfg.enable_drag = false;
     ekf.perturb_cfg.enable_srp  = false;
 }
@@ -78,12 +72,7 @@ void configure(UnscentedKalmanFilter& ukf) {
     ukf.perturb_cfg.enable_srp  = false;
 }
 
-} // namespace
-
-// Zero-innovation measurement (z = predicted position) keeps the filter
-// numerically stable over many iterations while still exercising the full
-// predict+update matrix pipeline — only P changes step to step, x just
-// follows the real two-body trajectory under predict().
+}
 
 double bench_kf_step(int iterations) {
     KalmanFilter kf;
@@ -157,4 +146,4 @@ void run_filter_benchmarks() {
     std::printf("3 filters simultaneously (%d iterations):  %.3f us/tick\n", N, all3_us);
 }
 
-} // namespace orbitforge::benchmarks
+}

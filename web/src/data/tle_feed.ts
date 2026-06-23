@@ -11,32 +11,16 @@ export interface SatellitePreset {
 export const PRESETS: SatellitePreset[] = [
   { name: 'ISS (ZARYA)',       noradId: 25544, category: 'Station',  whyInteresting: '408 km altitude, 51.6° inclination, high drag, fastest consistency demo' },
   { name: 'STARLINK-1008',     noradId: 44714, category: 'Starlink', whyInteresting: '550 km altitude, 53° inclination, high area to mass, drag dominated' },
-  // GPS BIIR-2 (NORAD 26360) stopped publishing GP data (decommissioned),
-  // swapped for BIIR-5, same generation/orbit class, currently active.
-  // Same kind of swap as STARLINK-1007 -> -1008 earlier (see checkpoint.md).
   { name: 'GPS BIIR-5',        noradId: 26407, category: 'GPS',      whyInteresting: '20,200 km altitude, medium perturbations, position accuracy demo' },
   { name: 'GOES-16',           noradId: 41866, category: 'Weather',  whyInteresting: '35,786 km altitude (geostationary), sunlight pressure dominates, slow updates' },
   { name: 'COSMOS 2251 DEB',   noradId: 33791, category: 'Debris',   whyInteresting: 'High eccentricity debris orbit, shows filter divergence' },
 ]
 
-// Last-known-good TLEs for each preset, used when the live CelesTrak fetch
-// fails (network block, CelesTrak outage, etc. — see the session notes on
-// this exact failure mode: a VPN's/ISP's exit IP getting blocked/rate-limited
-// by celestrak.org while every other site works fine). These are genuinely
-// real elements fetched live from CelesTrak (not fabricated/approximated —
-// see CLAUDE.md's "real satellites, real data" premise), just possibly
-// stale by the time they're used as a fallback. cachedAt records exactly
-// when each one was captured so the UI can be honest about staleness rather
-// than presenting a fallback as if it were live.
-//
-// Lives in fallback_tles.json (not inline here) so scripts/refresh_fallback_tles.mjs
-// can regenerate it as plain data — see .github/workflows/refresh_fallback_tles.yml,
-// which runs that script weekly and commits the result.
 interface FallbackEntry {
   name: string
   line1: string
   line2: string
-  cachedAt: string // ISO date
+  cachedAt: string
 }
 
 const FALLBACK_TLES: Record<string, FallbackEntry> = fallbackTlesData
@@ -44,21 +28,11 @@ const FALLBACK_TLES: Record<string, FallbackEntry> = fallbackTlesData
 export interface TleFetchResult {
   elements: OrbitalElements
   fromCache: boolean
-  cachedAt?: string // ISO date the fallback was captured; only set when fromCache is true
+  cachedAt?: string
 }
 
-// A working request measures well under 1s (see checkpoint notes) — 8s is
-// generous headroom for real latency while cutting off the case that
-// actually hurts: a network silently dropping the connection (firewall/IP
-// block, see tle_feed's fallback-table comment above) leaves fetch() to
-// hang on the browser's own default timeout, which can run 60s+ with zero
-// feedback. AbortController turns that into a fast, predictable failure
-// that falls through to the cached fallback below.
 const FETCH_TIMEOUT_MS = 8000
 
-// The historical /satcat/tle.php?CATNR= endpoint was deprecated in 2020
-// and removed in 2022 (confirmed live: it now returns an HTML notice, not
-// a TLE) — replaced by the "GP data" API CelesTrak migrated to.
 export async function fetchTleByNorad(noradId: number): Promise<TleFetchResult> {
   const url = `https://celestrak.org/NORAD/elements/gp.php?CATNR=${noradId}&FORMAT=TLE`
   try {

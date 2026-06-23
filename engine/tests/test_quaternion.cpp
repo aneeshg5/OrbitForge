@@ -27,8 +27,6 @@ TEST(Quaternion, ExpLogRoundTrip) {
 }
 
 TEST(Quaternion, ExpLogRoundTripLargeAngle) {
-    // Exercises the exact axis-angle branch (not the small-angle fallback)
-    // at an angle well outside first-order territory.
     const Eigen::Vector3d delta_theta = Eigen::Vector3d(1.0, -0.5, 0.3).normalized() * 2.0;
     const Quat q = quat_exp(delta_theta);
     const Eigen::Vector3d recovered = quat_log(q);
@@ -36,23 +34,15 @@ TEST(Quaternion, ExpLogRoundTripLargeAngle) {
 }
 
 TEST(Quaternion, KinematicsMatchesKnownConstantSpinRate) {
-    // For constant omega = (0,0,wz) about a body initially aligned with
-    // ECI (q = identity), q̇ at t=0 must match the analytical derivative of
-    // a pure z-axis rotation: q(t) = [cos(wz*t/2), 0,0,sin(wz*t/2)], so
-    // q̇(0) = [0,0,0, wz/2] in (w,x,y,z) order — coeffs() order (x,y,z,w)
-    // puts that last.
     const double wz = 0.3;
     const Quat q = Quat::Identity();
     const Eigen::Vector4d qdot = quat_kinematics_coeffs_dot(q, Eigen::Vector3d(0.0, 0.0, wz));
     Eigen::Vector4d expected;
-    expected << 0.0, 0.0, wz / 2.0, 0.0;  // (x,y,z,w) — z carries it, w stays 0
+    expected << 0.0, 0.0, wz / 2.0, 0.0;
     EXPECT_TRUE(qdot.isApprox(expected, 1e-12));
 }
 
 TEST(Quaternion, KinematicsIntegrationProducesExpectedRotation) {
-    // Integrate q̇ = ½q⊗[0,ω] for constant omega=(0,0,wz) over time T via
-    // tiny manual Euler steps (independent of rk4_step, to cross-check it)
-    // and confirm the rotation angle advances by wz*T, recovered via quat_log.
     const double wz = 0.4;
     const double T  = 1.0;
     const int    n_steps = 200000;

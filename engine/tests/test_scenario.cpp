@@ -13,9 +13,6 @@ namespace {
 
 constexpr double k_deg_to_rad = 1.7453292519943295769e-2;
 
-// Builds a syntactically valid TLE line with each field placed at its exact
-// NORAD column offset via std::string::replace, rather than hand-typed
-// spacing — avoids transcription errors in fixed-width column counting.
 std::string make_tle_line1(int sat_num, int epoch_year_2d, double epoch_day) {
     std::string line(69, ' ');
     line[0] = '1';
@@ -52,7 +49,6 @@ std::string make_tle_line2(int sat_num, double incl_deg, double raan_deg, double
     return line;
 }
 
-// ISS-like elements: ~408 km circular-ish LEO, 51.6 deg inclination.
 TleElements iss_like_elements() {
     const std::string l1 = make_tle_line1(25544, 24, 1.5);
     const std::string l2 =
@@ -60,7 +56,7 @@ TleElements iss_like_elements() {
     return parse_tle(l1.c_str(), l2.c_str());
 }
 
-}  // namespace
+}
 
 TEST(ParseTle, ExtractsKnownElements) {
     const TleElements elem = iss_like_elements();
@@ -77,7 +73,6 @@ TEST(ParseTle, ExtractsKnownElements) {
 
 TEST(ParseTle, EpochJulianDateInExpectedRange) {
     const TleElements elem = iss_like_elements();
-    // 2024-01-02.5 should land within early-2024 JD range.
     EXPECT_GT(elem.epoch_jd, 2460300.0);
     EXPECT_LT(elem.epoch_jd, 2460320.0);
 }

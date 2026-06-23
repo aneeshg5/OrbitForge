@@ -1,19 +1,3 @@
-// Procedural starfield backdrop — the fixed, infinitely-distant sky
-// behind the actual solar system (see solar_system.ts for the Sun,
-// Moon, and planets, which do have real in-scene positions). Not a real
-// star catalog (no RA/Dec data sourced here, so constellations aren't
-// astronomically accurate) — this is a believable deep-space backdrop: a
-// uniform scattering of dim background stars, a denser/brighter band
-// standing in for the Milky Way, and a handful of brighter foreground
-// stars, all generated from a fixed seed so the sky is the same every
-// load rather than reshuffling on every page refresh.
-//
-// Rendered as GL_POINTS on a sphere far outside the camera's max zoom
-// distance, using a rotation-only view matrix (gl_utils.mat4StripTranslation)
-// so the stars behave as though at infinity — camera rotation moves them,
-// zooming does not, matching how real stars behave relative to a nearby
-// planet.
-
 import { createProgram, type Mat4 } from './gl_utils.js'
 
 const VERTEX_SRC = `#version 300 es
@@ -42,7 +26,6 @@ in float v_brightness;
 out vec4 outColor;
 
 void main() {
-  // Soft circular falloff so points render as dots, not squares.
   vec2 centered = gl_PointCoord - vec2(0.5);
   float dist = length(centered);
   if (dist > 0.5) discard;
@@ -51,10 +34,8 @@ void main() {
 }
 `
 
-const STAR_RADIUS = 50; // scene units — well outside the camera's max distance (40)
+const STAR_RADIUS = 50;
 
-// Deterministic PRNG (mulberry32) so the sky is stable across reloads
-// instead of reshuffling every time.
 function makeRng(seed: number): () => number {
   let a = seed;
   return () => {
@@ -66,8 +47,6 @@ function makeRng(seed: number): () => number {
   };
 }
 
-// Uniform random point on a unit sphere (not uniform-on-each-axis, which
-// would visibly cluster stars at the poles).
 function randomUnitSphere(rng: () => number): [number, number, number] {
   const u = rng();
   const v = rng();
@@ -90,22 +69,15 @@ function generateStars(): StarBuffers {
   const sizes: number[] = [];
   const brightness: number[] = [];
 
-  // Background stars: most are dim and small — real sky star brightness
-  // follows a steep distribution (few bright stars, many faint ones).
   const backgroundCount = 3500;
   for (let i = 0; i < backgroundCount; i++) {
     const [x, y, z] = randomUnitSphere(rng);
     positions.push(x * STAR_RADIUS, y * STAR_RADIUS, z * STAR_RADIUS);
-    const mag = Math.pow(rng(), 3); // skew toward dim
+    const mag = Math.pow(rng(), 3);
     sizes.push(1.0 + mag * 1.5);
     brightness.push(0.15 + mag * 0.55);
   }
 
-  // Milky Way band: extra stars concentrated near a tilted great circle,
-  // density falling off with angular distance from the band plane.
-  // Tilt is arbitrary (no real galactic-plane data used) — chosen purely
-  // so the band reads as a diagonal sweep across the sky rather than
-  // lining up suspiciously with any coordinate axis.
   const bandNormal = normalize([0.35, 0.85, -0.4]);
   const bandCount = 6000;
   let bandAdded = 0;
@@ -115,21 +87,15 @@ function generateStars(): StarBuffers {
     const [x, y, z] = randomUnitSphere(rng);
     const distFromBand = Math.abs(x * bandNormal[0] + y * bandNormal[1] + z * bandNormal[2]);
     const bandWidth = 0.22;
-    if (distFromBand > bandWidth) continue; // rejection sample to concentrate near the band
+    if (distFromBand > bandWidth) continue;
     const falloff = 1.0 - distFromBand / bandWidth;
     positions.push(x * STAR_RADIUS, y * STAR_RADIUS, z * STAR_RADIUS);
     const mag = Math.pow(rng(), 2);
     sizes.push(1.5 + mag * 1.5);
-    // Higher brightness floor than the background population (not lower)
-    // — density alone from rejection sampling wasn't reading as a visible
-    // band at normal point sizes; boosting per-point brightness too makes
-    // the haze actually legible instead of just statistically present.
     brightness.push((0.35 + mag * 0.45) * falloff);
     bandAdded++;
   }
 
-  // A small number of distinctly brighter foreground stars for visual
-  // interest — not tied to any real bright-star catalog.
   const brightCount = 40;
   for (let i = 0; i < brightCount; i++) {
     const [x, y, z] = randomUnitSphere(rng);
@@ -189,7 +155,6 @@ export class Starfield {
     gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
   }
 
-  /** viewRotation should be gl_utils.mat4StripTranslation(view), not the raw view matrix. */
   render(viewRotation: Mat4, proj: Mat4): void {
     const gl = this.gl;
     gl.useProgram(this.program);

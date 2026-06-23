@@ -1,15 +1,3 @@
-// Earth's rotation axis: a dashed line through the poles, extending
-// slightly beyond the sphere surface so the tilt applied in main.ts (see
-// EARTH_TILT) is visible and easy to track while orbiting the camera.
-// Static geometry built once — dashes are literal disjoint GL_LINES
-// segments rather than a shader stipple, since the line never moves.
-//
-// Drawn along scene-Y: earth.ts's sphere puts its geometric pole there,
-// and orbit.ts/covariance.ts rotate ECI position data so the real physics
-// spin axis (ECI-Z, see CLAUDE.md §6) lands on scene-Y too — see the
-// comment in orbit.ts for why that remap lives on the data side rather
-// than moving Earth's pole to match ECI directly.
-
 import { createProgram, type Mat4 } from './gl_utils.js'
 
 const VERTEX_SRC = `#version 300 es
@@ -36,7 +24,7 @@ void main() {
 `
 
 const SPHERE_RADIUS = 1.0
-const AXIS_OVERHANG = 0.4 // how far the line extends beyond each pole
+const AXIS_OVERHANG = 0.4
 const DASH_LENGTH = 0.06
 const GAP_LENGTH = 0.04
 
