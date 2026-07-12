@@ -244,7 +244,7 @@ $$\hat{\boldsymbol{\lambda}} = (-\sin\lambda,\;\cos\lambda,\;0)^T\quad\text{[eas
 
 ECEF → ECI via $R_\text{ECI/ECEF} = R_z(-\theta_\text{GAST})$.  Default $\sigma_\text{mag} = 100$ nT.
 
-## §6 Filter Consistency — NEES Monte Carlo (CLAUDE.md §14)
+## §6 Filter Consistency — NEES Monte Carlo
 
 For a consistent filter, the estimation error $\mathbf{e}_i = \mathbf{x}_{\text{true},i} - \hat{\mathbf{x}}_i$ satisfies $\mathbf{e}_i \sim \mathcal{N}(\mathbf{0}, P_i)$, so the Normalized Estimation Error Squared
 
@@ -264,7 +264,7 @@ Test parameters: $N=100$ runs, 500 steps, $dt=10$ s, ISS circular orbit (two-bod
 
 ## §7 Phase 5 — 6DOF Attitude Estimation
 
-KF is unaffected by this section (CLAUDE.md §6.1) — stays the 6-state $[\mathbf{r},\mathbf{v}]$ filter from §3 forever. Everything below applies only to EKF/UKF's new 12-state multiplicative-EKF (MEKF) attitude block, stacked with the *unchanged* §3.1 orbital block.
+KF is unaffected by this section — stays the 6-state $[\mathbf{r},\mathbf{v}]$ filter from §3 forever. Everything below applies only to EKF/UKF's new 12-state multiplicative-EKF (MEKF) attitude block, stacked with the *unchanged* §3.1 orbital block.
 
 ### §7.1 Attitude Convention and Quaternion Kinematics
 
@@ -285,7 +285,7 @@ $$\dot{\boldsymbol{\omega}} = I^{-1}\left(-\boldsymbol{\omega}\times(I\boldsymbo
 $$dg = d\boldsymbol{\omega}\times(I\boldsymbol{\omega}) + \boldsymbol{\omega}\times(I\,d\boldsymbol{\omega}) = \big(-[(I\boldsymbol{\omega})\times] + [\boldsymbol{\omega}\times]I\big)\,d\boldsymbol{\omega}$$
 using $\mathbf{a}\times\mathbf{b} = -[\mathbf{b}\times]\mathbf{a}$ for the first term. So:
 $$\frac{\partial g}{\partial\boldsymbol{\omega}} = [\boldsymbol{\omega}\times]I - [(I\boldsymbol{\omega})\times], \qquad \frac{\partial\dot{\boldsymbol{\omega}}}{\partial\boldsymbol{\omega}} = -I^{-1}\left([\boldsymbol{\omega}\times]I - [(I\boldsymbol{\omega})\times]\right)$$
-**Validated in code, not just on paper**: `test_rigid_body.cpp`'s `EulerJacobianMatchesFiniteDifference` cross-checks this analytical form against central finite differences (passes to $10^{-6}$) — the same discipline as Phase 1's J2 Jacobian, satisfying CLAUDE.md §22 rule 6 ("don't guess at Jacobian terms").
+**Validated in code, not just on paper**: `test_rigid_body.cpp`'s `EulerJacobianMatchesFiniteDifference` cross-checks this analytical form against central finite differences (passes to $10^{-6}$) — the same discipline as Phase 1's J2 Jacobian — analytical Jacobians always cross-checked against finite differences before being trusted.
 
 Note $\dot{\boldsymbol{\omega}}$ has **no dependence on attitude** — torque-free rotation is attitude-independent, so the Jacobian's $\partial\dot{\boldsymbol{\omega}}/\partial(\delta\theta)$ block is exactly zero (§7.3's $F$ matrix).
 
@@ -310,7 +310,7 @@ $$F = \begin{bmatrix} -[\hat{\boldsymbol{\omega}}\times] & I_3 & 0_3 & 0_3 \\ 0_
 
 **Reset step**, applied after every measurement update:
 $$q_\text{ref} \leftarrow \left(q_\text{ref}\otimes\delta q(\hat{\delta\boldsymbol{\theta}})\right)\!/\!\left|q_\text{ref}\otimes\delta q(\hat{\delta\boldsymbol{\theta}})\right|, \qquad \hat{\delta\boldsymbol{\theta}}\leftarrow \mathbf{0}$$
-**Right**-multiplication — directly forced by $q_\text{true}=q_\text{ref}\otimes\delta q$ above (substituting the posterior $\hat{\delta\boldsymbol{\theta}}$ for the true-but-unknown $\delta\boldsymbol{\theta}$ folds the estimated correction into $q_\text{ref}$ exactly). An earlier draft of this section had this backwards (left-multiplication) before this derivation was carried out carefully — corrected in CLAUDE.md to match.
+**Right**-multiplication — directly forced by $q_\text{true}=q_\text{ref}\otimes\delta q$ above (substituting the posterior $\hat{\delta\boldsymbol{\theta}}$ for the true-but-unknown $\delta\boldsymbol{\theta}$ folds the estimated correction into $q_\text{ref}$ exactly). An earlier draft of this section had this backwards (left-multiplication) before this derivation was carried out carefully — corrected here to match.
 
 $\delta q(\delta\boldsymbol{\theta})$ is the quaternion exponential map (`math/quaternion.cpp::quat_exp`): exact axis-angle form $[\cos(|\delta\boldsymbol{\theta}|/2),\ \sin(|\delta\boldsymbol{\theta}|/2)\,\hat{\delta\boldsymbol{\theta}}]$, with a first-order Taylor fallback near $\delta\boldsymbol{\theta}=\mathbf{0}$ to avoid a 0/0 in the axis normalization.
 
@@ -324,7 +324,7 @@ This is solid evidence the implementation is internally and geometrically correc
 
 ### §7.4 Gyro and Magnetometer Measurement Jacobians
 
-**Gyro** — direct measurement of the $\boldsymbol{\omega}$ state (sensor-side bias only, no filter bias state — CLAUDE.md §6.3, mirrors the existing IMU pattern):
+**Gyro** — direct measurement of the $\boldsymbol{\omega}$ state (sensor-side bias only, no filter bias state — mirrors the existing IMU pattern):
 $$H_\text{gyro} = \begin{bmatrix}0_3 & I_3 & 0_3 & 0_3\end{bmatrix} \quad (3\times12)$$
 
 **Magnetometer** — predicted measurement $\hat{\mathbf{z}}_\text{mag} = A(q_\text{ref})\,\mathbf{B}_\text{ECI}(\hat{\mathbf{r}})$ (existing IGRF dipole model, §5.3, now finally consumed). Linearizing the rotation of a fixed vector by a perturbed quaternion ($A(q_\text{ref}\otimes\delta q)\mathbf{B} \approx (I_3-[\delta\boldsymbol{\theta}\times])A(q_\text{ref})\mathbf{B} = \hat{\mathbf{z}}_\text{mag} - \delta\boldsymbol{\theta}\times\hat{\mathbf{z}}_\text{mag} = \hat{\mathbf{z}}_\text{mag} + [\hat{\mathbf{z}}_\text{mag}\times]\delta\boldsymbol{\theta}$):
